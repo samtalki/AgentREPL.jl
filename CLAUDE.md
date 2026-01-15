@@ -26,10 +26,10 @@ JULIA_EVAL_PROJECT=/path/to/project julia --project=. bin/julia-eval-server
 
 ### Single Module Design
 
-The entire package lives in `src/AgentEval.jl` (~280 lines) with:
+The entire package lives in `src/AgentEval.jl` (~300 lines) with:
 
-- **`capture_eval(code)`** - Evaluates Julia code in the Main module, capturing stdout/stderr and returning (value, output, error)
-- **`format_result(value, output, err)`** - Formats evaluation results for display
+- **`capture_eval(code)`** - Evaluates Julia code in the Main module, capturing stdout/stderr and returning (value, output, error, backtrace)
+- **`format_result(value, output, err, bt)`** - Formats evaluation results for display
 - **`get_user_symbols()`** - Discovers user-defined symbols (filtering out protected internals)
 - **`start_server()`** - Entry point that registers MCP tools and starts the server
 

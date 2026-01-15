@@ -46,15 +46,15 @@ const PROTECTED_SYMBOLS = Set([
 ])
 
 """
-    capture_eval(code::String) -> (value, output, error)
+    capture_eval(code::String) -> (value, output, error, backtrace)
 
 Evaluate Julia code and capture both the return value and any printed output.
-Returns a tuple of (value, stdout_output, error_or_nothing).
+Returns a tuple of (value, stdout_output, error_or_nothing, backtrace_or_nothing).
 """
 function capture_eval(code::String)
-    output = IOBuffer()
     value = nothing
     err = nothing
+    bt = nothing
 
     old_stdout = stdout
     old_stderr = stderr
@@ -67,6 +67,7 @@ function capture_eval(code::String)
         value = include_string(Main, code, "AgentEval[REPL]")
     catch e
         err = e
+        bt = catch_backtrace()
     finally
         # Restore stdout/stderr
         redirect_stdout(old_stdout)
@@ -75,29 +76,37 @@ function capture_eval(code::String)
         close(wr_err)
     end
 
-    # Read captured output
-    stdout_content = String(read(rd_out))
-    stderr_content = String(read(rd_err))
-    close(rd_out)
-    close(rd_err)
+    # Read captured output, ensuring pipes are closed even on read failure
+    stdout_content = ""
+    stderr_content = ""
+    try
+        stdout_content = String(read(rd_out))
+        stderr_content = String(read(rd_err))
+    finally
+        close(rd_out)
+        close(rd_err)
+    end
 
     combined_output = stdout_content
     if !isempty(stderr_content)
         combined_output *= "\n[stderr]\n" * stderr_content
     end
 
-    return (value, combined_output, err)
+    return (value, combined_output, err, bt)
 end
 
 """
-    format_result(value, output::String, err) -> String
+    format_result(value, output::String, err, bt=nothing) -> String
 
 Format the evaluation result for display to the user.
 """
-function format_result(value, output::String, err)
+function format_result(value, output::String, err, bt=nothing)
     if err !== nothing
-        bt = catch_backtrace()
-        error_msg = sprint(showerror, err, bt)
+        error_msg = if bt !== nothing
+            sprint(showerror, err, bt)
+        else
+            sprint(showerror, err)
+        end
         return "Error:\n$error_msg"
     end
 
@@ -165,7 +174,16 @@ AgentEval.start_server()  # Blocks, waiting for MCP client
 function start_server(; project_dir::Union{String,Nothing}=nothing)
     # Activate project if specified
     if project_dir !== nothing
-        Pkg.activate(project_dir)
+        if !isdir(project_dir)
+            error("Cannot activate project: directory '$project_dir' not found")
+        end
+
+        try
+            Pkg.activate(project_dir)
+            @info "Activated project" project_dir
+        catch e
+            error("Cannot activate project at '$project_dir': $(sprint(showerror, e))")
+        end
     end
 
     # Tool: Evaluate Julia code
@@ -191,9 +209,19 @@ Use this for iterative development, testing, and exploration.
             )
         ],
         handler = params -> begin
-            code = params["code"]
-            value, output, err = capture_eval(code)
-            result = format_result(value, output, err)
+            code = get(params, "code", nothing)
+
+            # Validate input
+            if code === nothing || !isa(code, AbstractString)
+                return TextContent(text = "Error: 'code' parameter is required and must be a string")
+            end
+
+            if isempty(strip(code))
+                return TextContent(text = "Error: 'code' parameter cannot be empty")
+            end
+
+            value, output, err, bt = capture_eval(code)
+            result = format_result(value, output, err, bt)
             TextContent(text = result)
         end
     )
@@ -213,20 +241,36 @@ Use this when you want to start fresh without restarting Julia.
         parameters = [],
         handler = _ -> begin
             cleared = String[]
+            skipped = String[]
             for name in Base.invokelatest(get_user_symbols)
                 try
                     Core.eval(Main, :($(name) = nothing))
                     push!(cleared, string(name))
-                catch
-                    # Some symbols can't be reassigned, skip them
+                catch e
+                    # Expected: const bindings and special variables can't be reassigned
+                    if e isa ErrorException && occursin("cannot assign", e.msg)
+                        push!(skipped, string(name))
+                    else
+                        # Unexpected error - include details
+                        push!(skipped, "$(name) ($(typeof(e).name.name))")
+                    end
                 end
             end
 
-            if isempty(cleared)
-                TextContent(text = "No user variables to clear.")
+            msg = if isempty(cleared) && isempty(skipped)
+                "No user variables to clear."
+            elseif isempty(cleared)
+                "No variables cleared. Skipped $(length(skipped)) const/protected: $(join(skipped, ", "))"
             else
-                TextContent(text = "Cleared $(length(cleared)) variable(s): $(join(cleared, ", "))\n\nNote: Type redefinitions require restarting the Claude session.")
+                result = "Cleared $(length(cleared)) variable(s): $(join(cleared, ", "))"
+                if !isempty(skipped)
+                    result *= "\nSkipped $(length(skipped)) const/protected: $(join(skipped, ", "))"
+                end
+                result *= "\n\nNote: Type redefinitions require restarting the Claude session."
+                result
             end
+
+            TextContent(text = msg)
         end
     )
 

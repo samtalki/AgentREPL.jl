@@ -122,6 +122,34 @@ AgentEval.start_server(project_dir="/path/to/your/project")
 
 ## Comparison with Alternatives
 
+### vs ClaudeCodeSDK.jl
+
+[ClaudeCodeSDK.jl](https://github.com/AtelierArith/ClaudeCodeSDK.jl) is an SDK for calling Claude Code **from** Julia. It's the opposite direction of AgentEval.
+
+| Aspect | AgentEval | ClaudeCodeSDK.jl |
+|--------|-----------|------------------|
+| Direction | Claude → Julia | Julia → Claude |
+| Purpose | Claude runs Julia code | Julia calls Claude |
+| Use case | AI agent development | Automating Claude workflows |
+
+**When to use ClaudeCodeSDK.jl**: You want to call Claude programmatically from Julia scripts or applications.
+
+**When to use AgentEval**: You want Claude Code to execute Julia code in a persistent session.
+
+### vs ModelContextProtocol.jl
+
+[ModelContextProtocol.jl](https://github.com/JuliaSMLM/ModelContextProtocol.jl) is the MCP framework that AgentEval is built on. It provides the building blocks (`MCPTool`, `MCPResource`, `mcp_server`) for creating MCP servers.
+
+| Aspect | AgentEval | ModelContextProtocol.jl |
+|--------|-----------|-------------------------|
+| Type | Ready-to-use MCP server | Framework for building servers |
+| Setup | One command | Write custom tools |
+| Flexibility | Julia eval only | Any tools you want |
+
+**When to use ModelContextProtocol.jl**: You want to build custom MCP tools beyond code evaluation.
+
+**When to use AgentEval**: You want persistent Julia evaluation without writing any MCP code.
+
 ### vs MCPRepl.jl
 
 [MCPRepl.jl](https://github.com/hexaeder/MCPRepl.jl) is an excellent package that inspired AgentEval. Key differences:
