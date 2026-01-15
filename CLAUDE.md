@@ -35,11 +35,12 @@ The entire package lives in `src/AgentEval.jl` (~300 lines) with:
 
 ### MCP Tools
 
-Three tools registered via ModelContextProtocol.jl:
+Four tools registered via ModelContextProtocol.jl:
 
 1. **`julia_eval`** - Evaluates arbitrary Julia code with persistent state
 2. **`julia_reset`** - Clears user-defined variables (cannot reset type definitions)
 3. **`julia_info`** - Returns session metadata (Julia version, project, variables, modules)
+4. **`julia_pkg`** - Package management (add, rm, status, update)
 
 ### Key Design Decisions
 

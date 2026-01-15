@@ -26,6 +26,7 @@ claude mcp add julia-eval -- julia --project=/path/to/AgentEval.jl -e "using Age
 - `julia_eval` - Evaluate Julia code with persistent state
 - `julia_reset` - Soft reset (clear variables, cannot redefine types)
 - `julia_info` - Get session info (Julia version, loaded packages, variables)
+- `julia_pkg` - Manage packages (add, rm, status, update)
 
 # See Also
 
@@ -311,12 +312,156 @@ Loaded Modules: $loaded_pkgs
         end
     )
 
+    # Tool: Package management
+    pkg_tool = MCPTool(
+        name = "julia_pkg",
+        description = """
+Manage Julia packages in the current environment.
+
+Actions:
+- add: Install packages (e.g., packages="JSON, DataFrames")
+- rm: Remove packages
+- status: Show installed packages
+- update: Update packages (all if packages not specified)
+
+The packages parameter accepts space or comma-separated names.
+
+Examples:
+- julia_pkg(action="add", packages="JSON")
+- julia_pkg(action="add", packages="JSON, DataFrames, CSV")
+- julia_pkg(action="rm", packages="OldPackage")
+- julia_pkg(action="status")
+- julia_pkg(action="update")
+- julia_pkg(action="update", packages="JSON")
+""",
+        parameters = [
+            ToolParameter(
+                name = "action",
+                type = "string",
+                description = "Package action: 'add', 'rm', 'status', or 'update'",
+                required = true
+            ),
+            ToolParameter(
+                name = "packages",
+                type = "string",
+                description = "Space or comma-separated package names. Required for 'add' and 'rm', optional for 'update'.",
+                required = false
+            )
+        ],
+        handler = params -> begin
+            # Extract and validate action
+            action = get(params, "action", nothing)
+            if action === nothing || !isa(action, AbstractString)
+                return TextContent(text = "Error: 'action' parameter is required and must be a string")
+            end
+
+            action_lower = lowercase(strip(action))
+            if action_lower ∉ ["add", "rm", "status", "update"]
+                return TextContent(text = "Error: action must be one of: add, rm, status, update (got: '$action')")
+            end
+
+            # Extract and parse packages parameter
+            packages_str = get(params, "packages", "")
+            if packages_str === nothing
+                packages_str = ""
+            end
+
+            # Parse package list (split on comma and/or whitespace)
+            pkg_list = String[]
+            if !isempty(strip(packages_str))
+                for part in split(packages_str, r"[,\s]+")
+                    cleaned = strip(part)
+                    if !isempty(cleaned)
+                        push!(pkg_list, cleaned)
+                    end
+                end
+            end
+
+            # Validate packages for actions that require them
+            if action_lower in ["add", "rm"] && isempty(pkg_list)
+                return TextContent(text = "Error: 'packages' parameter is required for action '$action_lower'")
+            end
+
+            # Execute package operation with output capture
+            result_msg = ""
+            old_stdout = stdout
+            old_stderr = stderr
+            rd_out, wr_out = redirect_stdout()
+            rd_err, wr_err = redirect_stderr()
+
+            err = nothing
+            bt = nothing
+            try
+                if action_lower == "add"
+                    Pkg.add(pkg_list)
+                elseif action_lower == "rm"
+                    Pkg.rm(pkg_list)
+                elseif action_lower == "status"
+                    Pkg.status()
+                elseif action_lower == "update"
+                    if isempty(pkg_list)
+                        Pkg.update()
+                    else
+                        Pkg.update(pkg_list)
+                    end
+                end
+            catch e
+                err = e
+                bt = catch_backtrace()
+            finally
+                redirect_stdout(old_stdout)
+                redirect_stderr(old_stderr)
+                close(wr_out)
+                close(wr_err)
+            end
+
+            # Read captured output
+            stdout_content = ""
+            stderr_content = ""
+            try
+                stdout_content = String(read(rd_out))
+                stderr_content = String(read(rd_err))
+            finally
+                close(rd_out)
+                close(rd_err)
+            end
+
+            # Format result
+            if err !== nothing
+                error_msg = bt !== nothing ? sprint(showerror, err, bt) : sprint(showerror, err)
+                result_msg = "Error during Pkg.$action_lower:\n$error_msg"
+            else
+                # Build success message
+                action_summary = if action_lower == "add"
+                    "Added $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                elseif action_lower == "rm"
+                    "Removed $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                elseif action_lower == "status"
+                    "Package Status:"
+                elseif action_lower == "update"
+                    isempty(pkg_list) ? "Updated all packages" : "Updated $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                end
+
+                result_parts = [action_summary]
+                if !isempty(strip(stdout_content))
+                    push!(result_parts, "\nOutput:\n$stdout_content")
+                end
+                if !isempty(strip(stderr_content))
+                    push!(result_parts, "\n[stderr]\n$stderr_content")
+                end
+                result_msg = join(result_parts, "")
+            end
+
+            TextContent(text = result_msg)
+        end
+    )
+
     # Create and start the server
     server = mcp_server(
         name = "agent-eval",
         version = "0.1.0",
         description = "Persistent Julia code evaluation for AI agents - eliminates TTFX",
-        tools = [eval_tool, reset_tool, info_tool]
+        tools = [eval_tool, reset_tool, info_tool, pkg_tool]
     )
 
     @info "AgentEval server starting..." julia_version=VERSION

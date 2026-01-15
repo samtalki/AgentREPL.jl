@@ -104,6 +104,36 @@ julia_info()
 # Loaded Modules: 42
 ```
 
+### `julia_pkg`
+
+Manage Julia packages in the current environment.
+
+```
+# Add packages
+julia_pkg(action="add", packages="JSON")
+julia_pkg(action="add", packages="JSON, DataFrames, CSV")
+
+# Remove packages
+julia_pkg(action="rm", packages="OldPackage")
+
+# Show package status
+julia_pkg(action="status")
+
+# Update all packages
+julia_pkg(action="update")
+
+# Update specific packages
+julia_pkg(action="update", packages="JSON")
+```
+
+Actions:
+- `add`: Install packages (packages parameter required)
+- `rm`: Remove packages (packages parameter required)
+- `status`: Show installed packages
+- `update`: Update packages (all if packages not specified)
+
+The `packages` parameter accepts space or comma-separated package names.
+
 ## Configuration
 
 ### Activate a Specific Project
