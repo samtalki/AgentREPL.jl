@@ -28,13 +28,13 @@ Persistent Julia code evaluation for AI agents via MCP (Model Context Protocol).
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/YOUR_USERNAME/AgentEval.jl")
+Pkg.add(url="https://github.com/samtalki/AgentEval.jl")
 ```
 
 Or for development:
 
 ```julia
-Pkg.dev("https://github.com/YOUR_USERNAME/AgentEval.jl")
+Pkg.dev("https://github.com/samtalki/AgentEval.jl")
 ```
 
 ## Quick Start
@@ -124,6 +124,12 @@ julia_pkg(action="update")
 
 # Update specific packages
 julia_pkg(action="update", packages="JSON")
+
+# Install dependencies from Project.toml/Manifest.toml
+julia_pkg(action="instantiate")
+
+# Resolve dependency graph
+julia_pkg(action="resolve")
 ```
 
 Actions:
@@ -131,6 +137,8 @@ Actions:
 - `rm`: Remove packages (packages parameter required)
 - `status`: Show installed packages
 - `update`: Update packages (all if packages not specified)
+- `instantiate`: Download and precompile all dependencies from Project.toml/Manifest.toml
+- `resolve`: Resolve dependency graph and update Manifest.toml
 
 The `packages` parameter accepts space or comma-separated package names.
 

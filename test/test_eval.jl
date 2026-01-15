@@ -62,12 +62,15 @@ end
 
 @testset "Result Formatting" begin
     @testset "Success with value" begin
-        result = AgentEval.format_result(42, "", nothing, nothing)
+        result = AgentEval.format_result("1 + 1", 42, "", nothing, nothing)
+        @test contains(result, "Code:")
+        @test contains(result, "1 + 1")
         @test contains(result, "Result: 42")
     end
 
     @testset "Success with output" begin
-        result = AgentEval.format_result(nothing, "Hello!", nothing, nothing)
+        result = AgentEval.format_result("println(\"Hello!\")", nothing, "Hello!", nothing, nothing)
+        @test contains(result, "Code:")
         @test contains(result, "Output:")
         @test contains(result, "Hello!")
     end
@@ -81,14 +84,16 @@ end
             bt = catch_backtrace()
         end
         err = ErrorException("Test error")
-        result = AgentEval.format_result(nothing, "", err, bt)
+        result = AgentEval.format_result("bad_code()", nothing, "", err, bt)
+        @test contains(result, "Code:")
         @test contains(result, "Error:")
         @test contains(result, "Test error")
     end
 
     @testset "Error formatting without backtrace" begin
         err = ErrorException("Test error")
-        result = AgentEval.format_result(nothing, "", err, nothing)
+        result = AgentEval.format_result("bad_code()", nothing, "", err, nothing)
+        @test contains(result, "Code:")
         @test contains(result, "Error:")
         @test contains(result, "Test error")
     end

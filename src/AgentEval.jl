@@ -26,7 +26,7 @@ claude mcp add julia-eval -- julia --project=/path/to/AgentEval.jl -e "using Age
 - `julia_eval` - Evaluate Julia code with persistent state
 - `julia_reset` - Soft reset (clear variables, cannot redefine types)
 - `julia_info` - Get session info (Julia version, loaded packages, variables)
-- `julia_pkg` - Manage packages (add, rm, status, update)
+- `julia_pkg` - Manage packages (add, rm, status, update, instantiate, resolve)
 
 # See Also
 
@@ -97,24 +97,30 @@ function capture_eval(code::String)
 end
 
 """
-    format_result(value, output::String, err, bt=nothing) -> String
+    format_result(code::String, value, output::String, err, bt=nothing) -> String
 
 Format the evaluation result for display to the user.
+Always shows the executed code so users can verify what ran.
 """
-function format_result(value, output::String, err, bt=nothing)
+function format_result(code::String, value, output::String, err, bt=nothing)
+    result_parts = String[]
+
+    # Always show the code that was executed
+    push!(result_parts, "Code:\n```julia\n$(strip(code))\n```")
+
+    # Include output even if there's an error (code may have printed before failing)
+    if !isempty(strip(output))
+        push!(result_parts, "Output:\n$output")
+    end
+
     if err !== nothing
         error_msg = if bt !== nothing
             sprint(showerror, err, bt)
         else
             sprint(showerror, err)
         end
-        return "Error:\n$error_msg"
-    end
-
-    result_parts = String[]
-
-    if !isempty(strip(output))
-        push!(result_parts, "Output:\n$output")
+        push!(result_parts, "Error:\n$error_msg")
+        return join(result_parts, "\n\n")
     end
 
     # Format the return value
@@ -222,7 +228,7 @@ Use this for iterative development, testing, and exploration.
             end
 
             value, output, err, bt = capture_eval(code)
-            result = format_result(value, output, err, bt)
+            result = format_result(code, value, output, err, bt)
             TextContent(text = result)
         end
     )
@@ -323,6 +329,8 @@ Actions:
 - rm: Remove packages
 - status: Show installed packages
 - update: Update packages (all if packages not specified)
+- instantiate: Download and precompile all dependencies from Project.toml/Manifest.toml
+- resolve: Resolve dependency graph and update Manifest.toml
 
 The packages parameter accepts space or comma-separated names.
 
@@ -332,13 +340,14 @@ Examples:
 - julia_pkg(action="rm", packages="OldPackage")
 - julia_pkg(action="status")
 - julia_pkg(action="update")
-- julia_pkg(action="update", packages="JSON")
+- julia_pkg(action="instantiate")
+- julia_pkg(action="resolve")
 """,
         parameters = [
             ToolParameter(
                 name = "action",
                 type = "string",
-                description = "Package action: 'add', 'rm', 'status', or 'update'",
+                description = "Package action: 'add', 'rm', 'status', 'update', 'instantiate', or 'resolve'",
                 required = true
             ),
             ToolParameter(
@@ -356,8 +365,8 @@ Examples:
             end
 
             action_lower = lowercase(strip(action))
-            if action_lower ∉ ["add", "rm", "status", "update"]
-                return TextContent(text = "Error: action must be one of: add, rm, status, update (got: '$action')")
+            if action_lower ∉ ["add", "rm", "status", "update", "instantiate", "resolve"]
+                return TextContent(text = "Error: action must be one of: add, rm, status, update, instantiate, resolve (got: '$action')")
             end
 
             # Extract and parse packages parameter
@@ -404,6 +413,10 @@ Examples:
                     else
                         Pkg.update(pkg_list)
                     end
+                elseif action_lower == "instantiate"
+                    Pkg.instantiate()
+                elseif action_lower == "resolve"
+                    Pkg.resolve()
                 end
             catch e
                 err = e
@@ -440,6 +453,10 @@ Examples:
                     "Package Status:"
                 elseif action_lower == "update"
                     isempty(pkg_list) ? "Updated all packages" : "Updated $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                elseif action_lower == "instantiate"
+                    "Instantiated environment (downloaded and precompiled dependencies)"
+                elseif action_lower == "resolve"
+                    "Resolved dependencies (updated Manifest.toml)"
                 end
 
                 result_parts = [action_summary]
