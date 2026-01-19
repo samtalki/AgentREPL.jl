@@ -65,8 +65,11 @@ Ensure a worker process exists, creating one if needed. Returns the worker ID.
 """
 function ensure_worker!()
     if WORKER.worker_id === nothing || !(WORKER.worker_id in workers())
-        # Spawn a new worker
-        new_workers = addprocs(1)
+        # Get the current project directory so worker inherits the environment
+        project_dir = dirname(Pkg.project().path)
+
+        # Spawn a new worker with the same project environment
+        new_workers = addprocs(1; exeflags=`--project=$project_dir`)
         WORKER.worker_id = first(new_workers)
 
         # Load Pkg on the worker for environment management
