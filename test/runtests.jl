@@ -1,6 +1,6 @@
 using Test
-using AgentEval
+using AgentREPL
 
-@testset "AgentEval.jl" begin
+@testset "AgentREPL.jl" begin
     include("test_eval.jl")
 end

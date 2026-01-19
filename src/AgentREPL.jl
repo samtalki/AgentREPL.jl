@@ -1,48 +1,46 @@
 """
-    AgentEval
+    AgentREPL
 
-A Julia package that provides persistent code evaluation for AI agents via MCP STDIO transport.
+A persistent Julia REPL for AI agents via MCP (Model Context Protocol).
 
-Unlike HTTP-based alternatives (MCPRepl.jl), AgentEval uses STDIO transport which:
-- Opens no network ports (more secure)
-- Auto-spawns when MCP client needs it (no manual startup)
-- Can be registered in Julia General registry
+AgentREPL solves Julia's "Time to First X" (TTFX) problem by maintaining a persistent
+worker subprocess. Instead of spawning fresh Julia processes for each command (1-2s startup),
+the REPL stays alive and you only pay the startup cost once.
 
 # Architecture
 
-AgentEval uses a worker subprocess model:
-- The MCP server runs in the main process
-- Code evaluation happens in a spawned worker process (via Distributed.jl)
-- `julia_reset` kills the worker and spawns a fresh one (true reset)
-- `julia_activate` switches the worker's active project/environment
+AgentREPL uses a worker subprocess model via Distributed.jl:
+- The MCP server runs in the main process (STDIO transport)
+- Code evaluation happens in a spawned worker process
+- `reset` kills the worker and spawns a fresh one (enables type redefinition)
+- `activate` switches the worker's project/environment
 
 # Quick Start
 
-```julia
-using AgentEval
-AgentEval.start_server()  # Blocks, waiting for MCP client
+Using the Claude Code plugin (recommended):
+```bash
+claude /plugin add samtalki/AgentREPL.jl
 ```
 
-# Claude Code Configuration
-
+Or manual MCP configuration:
 ```bash
-claude mcp add julia-eval -- julia --project=/path/to/AgentEval.jl /path/to/AgentEval.jl/bin/julia-eval-server
+claude mcp add julia-repl -- julia --project=/path/to/AgentREPL.jl /path/to/AgentREPL.jl/bin/julia-repl-server
 ```
 
 # Tools Provided
 
-- `julia_eval` - Evaluate Julia code with persistent state
-- `julia_reset` - Hard reset (kills worker, spawns fresh one)
-- `julia_info` - Get session info (Julia version, loaded packages, variables)
-- `julia_pkg` - Manage packages (add, rm, status, update, instantiate, resolve)
-- `julia_activate` - Switch active project/environment
+- `eval` - Evaluate Julia code with persistent state
+- `reset` - Hard reset (kills worker, spawns fresh one, enables type redefinition)
+- `info` - Get session info (Julia version, project, variables, worker ID)
+- `pkg` - Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
+- `activate` - Switch active project/environment
 
 # See Also
 
 - [ModelContextProtocol.jl](https://github.com/JuliaSMLM/ModelContextProtocol.jl) - MCP framework
-- [MCPRepl.jl](https://github.com/hexaeder/MCPRepl.jl) - HTTP-based alternative
+- [Modern Julia Workflows](https://modernjuliaworkflows.org/) - Best practices guide
 """
-module AgentEval
+module AgentREPL
 
 using ModelContextProtocol
 using Distributed
@@ -313,6 +311,23 @@ function run_pkg_action_on_worker(action::String, pkg_list::Vector{String})
                     Pkg.instantiate()
                 elseif act == "resolve"
                     Pkg.resolve()
+                elseif act == "test"
+                    if isempty(pkgs)
+                        Pkg.test()
+                    else
+                        Pkg.test(pkgs)
+                    end
+                elseif act == "develop"
+                    # develop can take paths or package names
+                    for pkg in pkgs
+                        if startswith(pkg, "/") || startswith(pkg, ".") || startswith(pkg, "~")
+                            Pkg.develop(path=expanduser(pkg))
+                        else
+                            Pkg.develop(pkg)
+                        end
+                    end
+                elseif act == "free"
+                    Pkg.free(pkgs)
                 end
             catch e
                 err = sprint(showerror, e, catch_backtrace())
@@ -343,22 +358,22 @@ end
 """
     start_server(; project_dir::Union{String,Nothing}=nothing)
 
-Start the AgentEval MCP server using STDIO transport.
+Start the AgentREPL MCP server using STDIO transport.
 
 # Arguments
 - `project_dir`: Optional path to a Julia project to activate on the worker.
 
 # Tools Provided
-- `julia_eval`: Evaluate Julia code with persistent state
-- `julia_reset`: Hard reset (kills worker, spawns fresh one)
-- `julia_info`: Get session information
-- `julia_pkg`: Manage packages
-- `julia_activate`: Switch active project/environment
+- `eval`: Evaluate Julia code with persistent state
+- `reset`: Hard reset (kills worker, spawns fresh one, enables type redefinition)
+- `info`: Get session information (version, project, variables, worker ID)
+- `pkg`: Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
+- `activate`: Switch active project/environment
 
 # Example
 ```julia
-using AgentEval
-AgentEval.start_server()  # Blocks, waiting for MCP client
+using AgentREPL
+AgentREPL.start_server()  # Blocks, waiting for MCP client
 ```
 """
 function start_server(; project_dir::Union{String,Nothing}=nothing)
@@ -375,9 +390,9 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
 
     # Tool: Evaluate Julia code
     eval_tool = MCPTool(
-        name = "julia_eval",
+        name = "eval",
         description = """
-Evaluate Julia code in a persistent Julia session.
+Evaluate Julia code in a persistent Julia REPL session.
 
 Features:
 - Variables and functions persist across calls
@@ -414,7 +429,7 @@ Use this for iterative development, testing, and exploration.
 
     # Tool: Hard reset (kill and respawn worker)
     reset_tool = MCPTool(
-        name = "julia_reset",
+        name = "reset",
         description = """
 Hard reset: Kill the Julia worker process and spawn a fresh one.
 
@@ -448,7 +463,7 @@ Session reset complete.
 
     # Tool: Session info
     info_tool = MCPTool(
-        name = "julia_info",
+        name = "info",
         description = """
 Get information about the current Julia session.
 
@@ -478,7 +493,7 @@ Worker ID: $(WORKER.worker_id)
 
     # Tool: Package management
     pkg_tool = MCPTool(
-        name = "julia_pkg",
+        name = "pkg",
         description = """
 Manage Julia packages in the current environment.
 
@@ -487,31 +502,33 @@ Actions:
 - rm: Remove packages
 - status: Show installed packages
 - update: Update packages (all if packages not specified)
-- instantiate: Download and precompile all dependencies from Project.toml/Manifest.toml
+- instantiate: Download and precompile dependencies from Project.toml/Manifest.toml
 - resolve: Resolve dependency graph and update Manifest.toml
+- test: Run package tests (current project if no packages specified)
+- develop: Put packages in development mode (use local code instead of registry)
+- free: Exit development mode (return to using registry version)
 
 The packages parameter accepts space or comma-separated names.
+For 'develop', you can use paths (starting with /, ., or ~) or package names.
 
 Examples:
-- julia_pkg(action="add", packages="JSON")
-- julia_pkg(action="add", packages="JSON, DataFrames, CSV")
-- julia_pkg(action="rm", packages="OldPackage")
-- julia_pkg(action="status")
-- julia_pkg(action="update")
-- julia_pkg(action="instantiate")
-- julia_pkg(action="resolve")
+- pkg(action="add", packages="JSON, DataFrames")
+- pkg(action="status")
+- pkg(action="test")
+- pkg(action="develop", packages="./MyLocalPackage")
+- pkg(action="free", packages="MyPackage")
 """,
         parameters = [
             ToolParameter(
                 name = "action",
                 type = "string",
-                description = "Package action: 'add', 'rm', 'status', 'update', 'instantiate', or 'resolve'",
+                description = "Package action: add, rm, status, update, instantiate, resolve, test, develop, or free",
                 required = true
             ),
             ToolParameter(
                 name = "packages",
                 type = "string",
-                description = "Space or comma-separated package names. Required for 'add' and 'rm', optional for 'update'.",
+                description = "Space or comma-separated package names or paths. Required for add, rm, develop, free. Optional for update, test.",
                 required = false
             )
         ],
@@ -522,8 +539,9 @@ Examples:
             end
 
             action_lower = lowercase(strip(action))
-            if action_lower ∉ ["add", "rm", "status", "update", "instantiate", "resolve"]
-                return TextContent(text = "Error: action must be one of: add, rm, status, update, instantiate, resolve (got: '$action')")
+            valid_actions = ["add", "rm", "status", "update", "instantiate", "resolve", "test", "develop", "free"]
+            if action_lower ∉ valid_actions
+                return TextContent(text = "Error: action must be one of: $(join(valid_actions, ", ")) (got: '$action')")
             end
 
             packages_str = get(params, "packages", "")
@@ -541,7 +559,8 @@ Examples:
                 end
             end
 
-            if action_lower in ["add", "rm"] && isempty(pkg_list)
+            # Actions that require packages
+            if action_lower in ["add", "rm", "develop", "free"] && isempty(pkg_list)
                 return TextContent(text = "Error: 'packages' parameter is required for action '$action_lower'")
             end
 
@@ -563,6 +582,14 @@ Examples:
                 "Instantiated environment (downloaded and precompiled dependencies)"
             elseif action_lower == "resolve"
                 "Resolved dependencies (updated Manifest.toml)"
+            elseif action_lower == "test"
+                isempty(pkg_list) ? "Ran tests for current project" : "Ran tests for: $(join(pkg_list, ", "))"
+            elseif action_lower == "develop"
+                "Put $(length(pkg_list)) package(s) in development mode: $(join(pkg_list, ", "))"
+            elseif action_lower == "free"
+                "Freed $(length(pkg_list)) package(s) from development mode: $(join(pkg_list, ", "))"
+            else
+                "Completed action: $action_lower"
             end
 
             result_parts = [action_summary]
@@ -579,7 +606,7 @@ Examples:
 
     # Tool: Activate project/environment
     activate_tool = MCPTool(
-        name = "julia_activate",
+        name = "activate",
         description = """
 Activate a Julia project or environment.
 
@@ -589,11 +616,11 @@ Supports:
 - Named environments like "@v1.10" for shared environments
 
 Examples:
-- julia_activate(path=".")  # Current directory
-- julia_activate(path="/path/to/MyProject")
-- julia_activate(path="@v1.10")  # Shared environment
+- activate(path=".")  # Current directory
+- activate(path="/path/to/MyProject")
+- activate(path="@v1.10")  # Shared environment
 
-After activation, use `julia_pkg(action="instantiate")` to install dependencies.
+After activation, use `pkg(action="instantiate")` to install dependencies.
 """,
         parameters = [
             ToolParameter(
@@ -612,7 +639,7 @@ After activation, use `julia_pkg(action="instantiate")` to install dependencies.
             result = activate_project_on_worker!(path)
 
             if result.success
-                TextContent(text = "Activated project: $(result.project)\n\nUse `julia_pkg(action=\"instantiate\")` to install dependencies if needed.")
+                TextContent(text = "Activated project: $(result.project)\n\nUse `pkg(action=\"instantiate\")` to install dependencies if needed.")
             else
                 TextContent(text = "Error activating project: $(result.error)")
             end
@@ -621,13 +648,13 @@ After activation, use `julia_pkg(action="instantiate")` to install dependencies.
 
     # Create and start the server
     server = mcp_server(
-        name = "agent-eval",
-        version = "0.2.0",
-        description = "Persistent Julia code evaluation for AI agents - eliminates TTFX",
+        name = "julia-repl",
+        version = "0.3.0",
+        description = "Persistent Julia REPL for AI agents - eliminates TTFX",
         tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool]
     )
 
-    @info "AgentEval server starting..." julia_version=VERSION
+    @info "AgentREPL server starting..." julia_version=VERSION
     start!(server)
 end
 

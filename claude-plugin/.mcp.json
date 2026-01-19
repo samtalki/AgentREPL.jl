@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "julia": {
+    "julia-repl": {
       "command": "julia",
       "args": [
         "--project=${CLAUDE_PLUGIN_ROOT}/..",
-        "${CLAUDE_PLUGIN_ROOT}/../bin/julia-eval-server"
+        "${CLAUDE_PLUGIN_ROOT}/../bin/julia-repl-server"
       ]
     }
   }

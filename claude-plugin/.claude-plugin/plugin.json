@@ -1,6 +1,6 @@
 {
-  "name": "julia-eval",
-  "version": "0.1.0",
-  "description": "Persistent Julia code evaluation for Claude Code - eliminates TTFX startup penalty",
-  "repository": "https://github.com/samtalki/AgentEval.jl"
+  "name": "julia",
+  "version": "0.3.0",
+  "description": "Persistent Julia REPL for Claude Code - eliminates TTFX startup penalty",
+  "repository": "https://github.com/samtalki/AgentREPL.jl"
 }

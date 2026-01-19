@@ -1,7 +1,7 @@
-name = "AgentEval"
+name = "AgentREPL"
 uuid = "c6b0b931-bd15-49f6-a31f-cf7d80eb5e81"
-version = "0.1.0"
-authors = ["Sam"]
+version = "0.3.0"
+authors = ["Samuel Talkington <talkington@pm.me>"]
 
 [deps]
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
@@ -9,8 +9,9 @@ ModelContextProtocol = "c58f755f-f2a7-4f48-bf29-4e9659b78499"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 
 [compat]
-Distributed = "1.11.0"
+Distributed = "1"
 ModelContextProtocol = "0.4"
+Pkg = "1"
 julia = "1.10"
 
 [extras]

@@ -1,22 +1,32 @@
 ---
 name: julia-reset
-description: Reset the Julia session by clearing user-defined variables
+description: Kill and respawn the Julia worker (hard reset)
 allowed-tools:
-  - mcp__julia-eval__julia_reset
+  - mcp__plugin_julia_julia-repl__reset
 ---
 
 # Julia Reset Command
 
-Reset the persistent Julia session by clearing user-defined variables.
+Kill the Julia worker process and spawn a fresh one (hard reset).
+
+## What This Does
+
+Unlike a "soft reset" that only clears variables, this is a **hard reset** that:
+- Kills the worker process entirely
+- Spawns a fresh Julia worker
+- Clears all variables, functions, and loaded packages
+- **Enables type/struct redefinitions** (impossible with soft reset)
+- Re-activates the previously activated project
 
 ## Instructions
 
-1. Call the `julia_reset` MCP tool
-2. Report what was cleared to the user
-3. Remind the user that type definitions cannot be reset - a session restart is required for that
+1. Call the `reset` MCP tool
+2. Report the old and new worker IDs to the user
+3. Remind the user that packages need to be reloaded with `using`
 
-## Notes
+## When to Use
 
-- This is a "soft reset" - packages remain loaded
-- Const bindings and type definitions cannot be cleared
-- If the user needs to redefine types, they must restart their Claude Code session
+- You need to redefine a struct or type
+- The session is in a bad/corrupted state
+- You want a completely clean slate
+- Something is behaving unexpectedly

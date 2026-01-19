@@ -1,0 +1,29 @@
+#!/usr/bin/env julia
+#
+# AgentREPL MCP Server - Persistent Julia REPL for AI agents
+#
+# This script starts an MCP server using STDIO transport that provides
+# a persistent Julia REPL, solving the TTFX (Time to First X) problem
+# for AI agents like Claude Code.
+#
+# Usage:
+#   julia --project=/path/to/AgentREPL.jl bin/julia-repl-server
+#
+# Claude Code plugin (recommended):
+#   claude /plugin add samtalki/AgentREPL.jl
+#
+# Manual configuration:
+#   claude mcp add julia-repl -- julia --project=/path/to/AgentREPL.jl \
+#       /path/to/AgentREPL.jl/bin/julia-repl-server
+#
+# Environment variables:
+#   JULIA_REPL_PROJECT - Optional path to a Julia project to activate
+#
+
+using AgentREPL
+
+# Get optional project directory from environment
+project_dir = get(ENV, "JULIA_REPL_PROJECT", nothing)
+
+# Start the server (blocks until terminated)
+AgentREPL.start_server(; project_dir=project_dir)

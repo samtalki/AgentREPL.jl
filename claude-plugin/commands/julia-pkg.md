@@ -1,9 +1,9 @@
 ---
 name: julia-pkg
-description: Manage Julia packages (add, remove, status, update, instantiate)
+description: Manage Julia packages (add, remove, status, update, test, develop)
 argument-hint: "<action> [packages]"
 allowed-tools:
-  - mcp__julia-eval__julia_pkg
+  - mcp__plugin_julia_julia-repl__pkg
 ---
 
 # Julia Package Management Command
@@ -12,8 +12,8 @@ Manage Julia packages in the current environment.
 
 ## Arguments
 
-- `action` - One of: add, rm, status, update, instantiate, resolve
-- `packages` - Package names (required for add/rm, optional for update)
+- `action` - One of: add, rm, status, update, instantiate, resolve, test, develop, free
+- `packages` - Package names or paths (required for add/rm/develop/free, optional for update/test)
 
 ## Instructions
 
@@ -29,8 +29,12 @@ Parse the user's arguments to determine the action and packages:
 | `update JSON` | update | JSON |
 | `instantiate` | instantiate | (none) |
 | `resolve` | resolve | (none) |
+| `test` | test | (none - tests current project) |
+| `test MyPackage` | test | MyPackage |
+| `develop ./MyLocalPkg` | develop | ./MyLocalPkg |
+| `free MyPackage` | free | MyPackage |
 
-Call `julia_pkg` with the appropriate action and packages parameters.
+Call `pkg` with the appropriate action and packages parameters.
 
 ## Examples
 
@@ -39,10 +43,15 @@ Call `julia_pkg` with the appropriate action and packages parameters.
 /julia-pkg status
 /julia-pkg update
 /julia-pkg instantiate
+/julia-pkg test
+/julia-pkg develop ./path/to/MyPackage
+/julia-pkg free MyPackage
 ```
 
 ## Notes
 
 - After adding packages, remind the user to load them with `using PackageName`
 - The `instantiate` action installs dependencies from Project.toml/Manifest.toml
-- The `resolve` action updates the Manifest.toml dependency graph
+- The `test` action runs Pkg.test() - can be slow for large test suites
+- The `develop` action puts a package in development mode (uses local code)
+- The `free` action exits development mode (returns to registry version)

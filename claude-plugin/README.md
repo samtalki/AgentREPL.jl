@@ -1,31 +1,37 @@
-# julia-eval Plugin for Claude Code
+# Julia Plugin for Claude Code
 
-This plugin provides persistent Julia code evaluation for Claude Code, eliminating the "Time to First X" (TTFX) startup penalty that normally occurs with each Julia invocation.
+This plugin provides a persistent Julia REPL for Claude Code, eliminating the "Time to First X" (TTFX) startup penalty that normally occurs with each Julia invocation.
 
 ## Prerequisites
 
 - Julia 1.10+ installed and available in PATH
-- AgentEval.jl package (this repository)
+- AgentREPL.jl package (this repository)
 
 ## Installation
 
-Add the plugin directory to Claude Code:
+Install directly from GitHub:
 
 ```bash
-claude --plugin-dir /path/to/AgentEval.jl/claude-plugin
+claude /plugin add samtalki/AgentREPL.jl
+```
+
+Or add the plugin directory locally for development:
+
+```bash
+claude --plugin-dir /path/to/AgentREPL.jl/claude-plugin
 ```
 
 ## What's Included
 
 ### MCP Server
 
-The plugin automatically configures the `julia` MCP server which provides:
+The plugin automatically configures the `julia-repl` MCP server which provides:
 
-- `julia_eval` - Evaluate Julia code with persistent state
-- `julia_reset` - **Hard reset**: kills worker, spawns fresh one
-- `julia_info` - Get session information (including worker ID)
-- `julia_pkg` - Manage packages
-- `julia_activate` - Switch project/environment
+- `eval` - Evaluate Julia code with persistent state
+- `reset` - **Hard reset**: kills worker, spawns fresh one
+- `info` - Get session information (including worker ID)
+- `pkg` - Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
+- `activate` - Switch project/environment
 
 ### Commands
 
@@ -41,14 +47,15 @@ The `julia-evaluation` skill provides best practices guidance for:
 - Understanding TTFX behavior
 - Working with session persistence
 - Environment management
+- Testing and development workflows
 - When to use hard reset vs continuing
 
 ## Architecture
 
-AgentEval uses a **worker subprocess model**:
+AgentREPL uses a **worker subprocess model**:
 - The MCP server runs in the main Julia process
 - Code evaluation happens in a spawned worker (via Distributed.jl)
-- `julia_reset` kills the worker and spawns a fresh one
+- `reset` kills the worker and spawns a fresh one
 - This enables true reset including type redefinitions
 
 ## Usage
@@ -65,7 +72,40 @@ On first use, Claude will ask about your environment preference:
 ## Session Behavior
 
 - Variables, functions, and packages persist across evaluations
-- `julia_reset` provides a true hard reset (kills worker process)
+- `reset` provides a true hard reset (kills worker process)
 - Type definitions CAN be changed after reset (unlike soft resets)
 - Activated environment persists even across reset
 - First evaluation is slow (TTFX), subsequent ones are fast
+
+## Package Management
+
+The `pkg` tool supports these actions:
+
+| Action | Description | Packages Required |
+|--------|-------------|-------------------|
+| `add` | Install packages | Yes |
+| `rm` | Remove packages | Yes |
+| `status` | Show installed packages | No |
+| `update` | Update packages | No (optional) |
+| `instantiate` | Install from Project.toml | No |
+| `resolve` | Update Manifest.toml | No |
+| `test` | Run package tests | No (optional) |
+| `develop` | Use local package code | Yes (path or name) |
+| `free` | Exit development mode | Yes |
+
+## Development Workflow
+
+For local package development:
+
+```
+# Put package in develop mode
+/julia-pkg develop ./MyLocalPackage
+
+# Make changes to the source code...
+
+# Test your changes
+/julia-pkg test MyLocalPackage
+
+# When done, return to registry version
+/julia-pkg free MyLocalPackage
+```

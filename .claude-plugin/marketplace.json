@@ -1,0 +1,29 @@
+{
+  "name": "julia-tools",
+  "owner": {
+    "name": "Samuel Talkington",
+    "email": "talkington@pm.me"
+  },
+  "metadata": {
+    "description": "Julia development tools for Claude Code - persistent REPL, package management, modern workflows",
+    "version": "0.3.0"
+  },
+  "plugins": [
+    {
+      "name": "julia",
+      "source": "./claude-plugin",
+      "description": "Persistent Julia REPL for Claude Code - eliminates TTFX startup penalty, supports modern Julia workflows",
+      "version": "0.3.0",
+      "author": {
+        "name": "Samuel Talkington",
+        "email": "talkington@pm.me"
+      },
+      "homepage": "https://github.com/samtalki/AgentREPL.jl",
+      "repository": "https://github.com/samtalki/AgentREPL.jl",
+      "license": "Apache-2.0",
+      "keywords": ["julia", "repl", "mcp", "ttfx", "scientific-computing", "data-science"],
+      "category": "development",
+      "tags": ["julia", "repl", "persistent-session", "package-management"]
+    }
+  ]
+}
