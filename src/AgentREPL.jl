@@ -373,8 +373,8 @@ function eval_in_tmux(code::String; timeout::Float64=30.0)
         sleep(0.05)  # Small delay between lines
     end
 
-    # Send marker command to detect completion
-    run(`tmux send-keys -t $session "println(\"$marker\")" Enter`)
+    # Send marker command to detect completion (nothing produces no output, marker is in comment)
+    run(`tmux send-keys -t $session $("nothing # $marker") Enter`)
 
     # Wait for marker to appear in output
     start_time = time()
@@ -385,7 +385,7 @@ function eval_in_tmux(code::String; timeout::Float64=30.0)
         sleep(0.1)
         current_content = read(`tmux capture-pane -t $session -p -S -1000`, String)
 
-        if contains(current_content, marker)
+        if contains(current_content, "# $marker")
             found_marker = true
             output_content = current_content
             break
@@ -422,10 +422,10 @@ function eval_in_tmux(code::String; timeout::Float64=30.0)
         end
     end
 
-    # Find marker line
+    # Find marker line (the comment line with the marker)
     marker_idx = 0
     for (i, line) in enumerate(lines)
-        if contains(line, marker)
+        if contains(line, "# $marker")
             marker_idx = i
             break
         end
@@ -435,7 +435,7 @@ function eval_in_tmux(code::String; timeout::Float64=30.0)
     if code_start_idx > 0 && marker_idx > code_start_idx
         # Skip the code lines and the println marker command
         output_start = code_start_idx + length(code_lines)
-        output_end = marker_idx - 2  # Skip "julia> println..." and marker itself
+        output_end = marker_idx - 1  # Skip "julia> nothing # ..." (no output line)
 
         if output_end >= output_start
             output_lines = lines[output_start:output_end]
@@ -893,7 +893,7 @@ Format the evaluation result for display to the user.
 Compact plain-text format (markdown isn't rendered in MCP tool output).
 Code is NOT included since the caller shows it before the tool call.
 """
-function format_result(value_str::String, output::String, error_str::Union{String,Nothing})
+function format_result(value_str, output, error_str)
     result_parts = String[]
 
     if error_str !== nothing
