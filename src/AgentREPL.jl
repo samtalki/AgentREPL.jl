@@ -223,6 +223,12 @@ function ensure_tmux_repl!(; open_terminal::Bool=true)
         if contains(pane_content, "julia>")
             TMUX_REPL.active = true
             @info "Reconnected to existing Julia REPL in tmux session '$(TMUX_REPL.session_name)'"
+            # Still try to open terminal if requested (user may have closed it)
+            if open_terminal && !TMUX_REPL.terminal_opened
+                if open_terminal_with_tmux_attach()
+                    TMUX_REPL.terminal_opened = true
+                end
+            end
             return true
         end
     end
@@ -1462,12 +1468,85 @@ The log file is written to ~/.julia/logs/repl.log by default.
         end
     )
 
+    # Tool: Switch REPL mode at runtime
+    mode_tool = MCPTool(
+        name = "mode",
+        description = """
+Switch between distributed worker and tmux REPL modes at runtime.
+
+Modes:
+- "distributed": Uses Distributed.jl worker subprocess (default, headless)
+- "tmux": Uses tmux session with visible terminal for bidirectional REPL
+
+Both modes can coexist - switching does not clean up the inactive mode.
+When switching to tmux, a terminal window will auto-open if not already visible.
+
+Use `mode(mode="tmux")` to see Julia output in a live terminal that you can also type in directly.
+""",
+        parameters = [
+            ToolParameter(
+                name = "mode",
+                type = "string",
+                description = "REPL mode: 'distributed' or 'tmux'",
+                required = true
+            )
+        ],
+        handler = params -> begin
+            mode_str = get(params, "mode", nothing)
+            if mode_str === nothing || !isa(mode_str, AbstractString)
+                return TextContent(text = "Error: 'mode' parameter is required and must be a string")
+            end
+
+            mode_sym = Symbol(lowercase(strip(mode_str)))
+            if mode_sym ∉ [:distributed, :tmux]
+                return TextContent(text = "Error: mode must be 'distributed' or 'tmux' (got: '$mode_str')")
+            end
+
+            # Check if already in requested mode
+            if REPL_MODE[] == mode_sym
+                return TextContent(text = "Already in $mode_sym mode.")
+            end
+
+            # Ensure the target backend is ready BEFORE updating mode
+            if mode_sym == :tmux
+                if !ensure_tmux_repl!(; open_terminal=true)
+                    return TextContent(text = "Error: tmux mode unavailable (tmux not installed). Install with: sudo dnf install tmux")
+                end
+                # Success - now update the mode
+                REPL_MODE[] = mode_sym
+                worker_info = WORKER.worker_id !== nothing ? "Worker (ID: $(WORKER.worker_id)) remains available" : "No distributed worker active"
+                msg = """
+Mode switched to: tmux
+- Julia REPL running in tmux session '$(TMUX_REPL.session_name)'
+- Terminal window should be visible (you can type directly in it)
+- $worker_info
+"""
+            else  # :distributed
+                try
+                    ensure_worker!()
+                catch e
+                    return TextContent(text = "Error: Failed to start distributed worker: $e")
+                end
+                # Success - now update the mode
+                REPL_MODE[] = mode_sym
+                tmux_info = TMUX_REPL.active ? "Tmux session '$(TMUX_REPL.session_name)' remains running" : "No tmux session active"
+                msg = """
+Mode switched to: distributed
+- Using Distributed.jl worker (ID: $(WORKER.worker_id))
+- $tmux_info
+"""
+            end
+
+            TextContent(text = msg)
+        end
+    )
+
     # Create and start the server
     server = mcp_server(
         name = "julia-repl",
         version = "0.3.0",
         description = "Persistent Julia REPL for AI agents - eliminates TTFX",
-        tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool, log_viewer_tool]
+        tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool, log_viewer_tool, mode_tool]
     )
 
     @info "AgentREPL server starting..." julia_version=VERSION

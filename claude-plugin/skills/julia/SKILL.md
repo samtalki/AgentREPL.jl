@@ -24,7 +24,15 @@ AgentREPL supports two modes:
 - Claude can also send commands and see the output
 - Both human and AI share the same interactive session
 
-To enable tmux mode, set the environment variable before starting Claude Code:
+### Switching Modes at Runtime
+
+You can switch between modes without restarting Claude Code:
+```
+mode(mode="tmux")       # Switch to tmux (opens terminal)
+mode(mode="distributed") # Switch back to distributed
+```
+
+Or set the default mode via environment variable before starting:
 ```bash
 JULIA_REPL_MODE=tmux claude
 ```
@@ -41,6 +49,7 @@ Both modes support **type redefinition** after reset.
 | `pkg` | Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free) |
 | `activate` | Switch active project/environment |
 | `log_viewer` | Open a terminal window showing Julia output in real-time (distributed mode only) |
+| `mode` | **Switch modes at runtime** - toggle between distributed and tmux without restart |
 
 ## Critical: Beautiful Code and Output Display
 
