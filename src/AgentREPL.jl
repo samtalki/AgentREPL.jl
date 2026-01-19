@@ -255,13 +255,8 @@ function activate_project_on_worker!(path::String)
     activate_expr = quote
         let p = $path
             try
-                if p == "@." || p == "."
-                    Pkg.activate(".")
-                elseif startswith(p, "@")
-                    Pkg.activate(p)
-                else
-                    Pkg.activate(p)
-                end
+                # Pkg.activate handles all path types: ".", "@.", "@v1.10", and regular paths
+                Pkg.activate(p)
                 (success = true, project = dirname(Pkg.project().path))
             catch e
                 (success = false, error = sprint(showerror, e))
