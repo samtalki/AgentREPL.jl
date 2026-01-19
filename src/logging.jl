@@ -228,6 +228,7 @@ end
     log_interaction(code::String, value_str::String, output::String, error_str::Union{String,Nothing})
 
 Log an interaction to the log file with ANSI syntax highlighting.
+Uses JuliaSyntaxHighlighting for code coloring when highlighting is enabled.
 """
 function log_interaction(code::String, value_str::String, output::String, error_str::Union{String,Nothing})
     LOG_VIEWER.log_io === nothing && return
@@ -237,9 +238,15 @@ function log_interaction(code::String, value_str::String, output::String, error_
     # Dim separator line
     println(io, ANSI_DIM, "─"^60, ANSI_RESET)
 
-    # Green bold prompt with code
-    code_formatted = replace(strip(code), "\n" => "\n       ")
-    println(io, ANSI_GREEN, ANSI_BOLD, "julia> ", ANSI_RESET, code_formatted)
+    # Apply syntax highlighting to code (force ANSI for terminal)
+    highlighted_code = highlight_code(code; format=:ansi)
+
+    # Format with continuation lines for multiline code
+    code_lines = split(strip(highlighted_code), '\n')
+    println(io, ANSI_GREEN, ANSI_BOLD, "julia> ", ANSI_RESET, code_lines[1])
+    for line in code_lines[2:end]
+        println(io, "       ", line)
+    end
     println(io)
 
     if error_str !== nothing

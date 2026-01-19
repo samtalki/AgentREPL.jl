@@ -53,21 +53,21 @@ end
 
 @testset "Result Formatting" begin
     @testset "Success with value" begin
-        result = AgentREPL.format_result("42", "", nothing)
-        @test contains(result, "→ 42")  # Arrow prefix for results
-        @test !contains(result, "Code:")  # Code should not be included
+        result = AgentREPL.format_result("1 + 1", "2", "", nothing)
+        @test contains(result, "julia> 1 + 1")  # REPL-style prompt
+        @test contains(result, "2")  # Result value
     end
 
     @testset "Success with output" begin
-        result = AgentREPL.format_result("nothing", "Hello!", nothing)
-        @test contains(result, "Output:")
-        @test contains(result, "Hello!")
+        result = AgentREPL.format_result("println(\"Hello!\")", "nothing", "Hello!", nothing)
+        @test contains(result, "julia> ")
+        @test contains(result, "Hello!")  # Output shown before result
     end
 
     @testset "Error formatting" begin
-        result = AgentREPL.format_result("nothing", "", "UndefVarError: `bad_code` not defined")
-        @test contains(result, "bad_code")
-        @test !contains(result, "Code:")  # Code should not be included
+        result = AgentREPL.format_result("bad_code", "nothing", "", "UndefVarError: `bad_code` not defined")
+        @test contains(result, "julia> bad_code")  # Code shown with prompt
+        @test contains(result, "UndefVarError")
     end
 
     @testset "Stacktrace truncation" begin

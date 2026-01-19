@@ -4,13 +4,19 @@ version = "0.3.0"
 authors = ["Samuel Talkington <talkington@pm.me>"]
 
 [deps]
+Crayons = "a8cc5b0e-0ffa-5ad4-8c14-923d3ee1735f"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+Highlights = "eafb193a-b7ab-5a9e-9068-77385905fa72"
+JuliaSyntaxHighlighting = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
 ModelContextProtocol = "c58f755f-f2a7-4f48-bf29-4e9659b78499"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 
 [compat]
+Crayons = "4.1.1"
 Distributed = "1"
+Highlights = "0.5.3"
+JuliaSyntaxHighlighting = "1.12.0"
 ModelContextProtocol = "0.4"
 Pkg = "1"
 julia = "1.10"
