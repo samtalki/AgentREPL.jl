@@ -161,8 +161,13 @@ function capture_eval_on_worker(code::String)
             error_str = err === nothing ? nothing : sprint(showerror, err, bt)
             value_str = try
                 repr(value)
-            catch
-                string(value)
+            catch repr_err
+                try
+                    string(value)
+                catch str_err
+                    # Final fallback for types that can't be stringified (e.g., JSON3.Object)
+                    "<$(typeof(value))>"
+                end
             end
 
             (value_str, combined_output, error_str)
@@ -248,14 +253,27 @@ end
     activate_project_on_worker!(path::String)
 
 Activate a Julia project/environment on the worker.
+
+Supports:
+- Regular paths: "/path/to/project", "./relative/path"
+- Current directory: "." or "@."
+- Shared environments: "@v1.12", "@myenv" (expands to ~/.julia/environments/...)
 """
 function activate_project_on_worker!(path::String)
     worker_id = ensure_worker!()
 
+    # Handle shared environment syntax (@v1.12, @myenv, etc.)
+    # The @ prefix syntax only works in Pkg REPL mode, not programmatically
+    resolved_path = if startswith(path, "@") && path != "@."
+        env_name = path[2:end]  # Strip the @ prefix
+        joinpath(homedir(), ".julia", "environments", env_name)
+    else
+        path
+    end
+
     activate_expr = quote
-        let p = $path
+        let p = $resolved_path
             try
-                # Pkg.activate handles all path types: ".", "@.", "@v1.10", and regular paths
                 Pkg.activate(p)
                 (success = true, project = dirname(Pkg.project().path))
             catch e
