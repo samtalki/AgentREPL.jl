@@ -358,7 +358,7 @@ AgentEval.start_server()  # Blocks, waiting for MCP client
 ```
 """
 function start_server(; project_dir::Union{String,Nothing}=nothing)
-    # Set initial project path
+    # Set initial project path (worker will be spawned lazily on first use)
     if project_dir !== nothing
         if !isdir(project_dir)
             error("Cannot activate project: directory '$project_dir' not found")
@@ -366,8 +366,8 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
         WORKER.project_path = project_dir
     end
 
-    # Spawn initial worker
-    ensure_worker!()
+    # NOTE: Worker is spawned lazily on first tool use to avoid
+    # conflicts with MCP STDIO transport during startup
 
     # Tool: Evaluate Julia code
     eval_tool = MCPTool(
@@ -623,7 +623,7 @@ After activation, use `julia_pkg(action="instantiate")` to install dependencies.
         tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool]
     )
 
-    @info "AgentEval server starting..." julia_version=VERSION worker_id=WORKER.worker_id
+    @info "AgentEval server starting..." julia_version=VERSION
     start!(server)
 end
 
