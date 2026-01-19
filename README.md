@@ -71,7 +71,15 @@ Start a new Claude Code session. The Julia MCP server will auto-start when Claud
 Ask Claude to run Julia code:
 > "Calculate the first 10 Fibonacci numbers in Julia"
 
-Claude will use the `eval` tool, and the result will appear instantly after the first call (which may take a few seconds for JIT compilation).
+Claude will use the `eval` tool and display REPL-style output:
+
+```
+julia> [fibonacci(i) for i in 1:10]
+
+[1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+```
+
+The first call may take a few seconds for JIT compilation; subsequent calls are instant.
 
 ## Architecture
 
@@ -101,15 +109,50 @@ AgentREPL uses a **worker subprocess model** via Distributed.jl:
 
 ### `eval`
 
-Evaluate Julia code in a persistent session.
+Evaluate Julia code in a persistent session. Output is formatted in familiar REPL style:
 
 ```
-# Example usage by Claude:
-eval(code = "x = 1 + 1")
-# Result: 2
+julia> x = 1 + 1
 
-eval(code = "x + 10")
-# Result: 12 (x persists!)
+2
+```
+
+```
+julia> x + 10
+
+12
+```
+
+Variables persist! Multi-line code works too:
+
+```
+julia> function fib(n)
+           n <= 1 && return n
+           fib(n-1) + fib(n-2)
+       end
+       [fib(i) for i in 1:10]
+
+[1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+```
+
+Printed output appears before the result:
+
+```
+julia> println("Computing..."); 42
+
+Computing...
+42
+```
+
+Errors are caught with truncated stacktraces:
+
+```
+julia> undefined_var
+
+UndefVarError: `undefined_var` not defined
+Stacktrace:
+ [1] top-level scope
+  ... (truncated)
 ```
 
 Features:
@@ -123,8 +166,11 @@ Features:
 **Hard reset**: Kills the worker process and spawns a fresh one.
 
 ```
-reset()
-# Worker killed and respawned - complete clean slate
+Session reset complete.
+- Old worker (ID: 2) terminated
+- New worker (ID: 3) spawned
+- All variables, functions, and types cleared
+- Packages will need to be reloaded with `using`
 ```
 
 This enables:
@@ -140,12 +186,11 @@ The activated environment persists across resets.
 Get session information including worker process ID.
 
 ```
-info()
-# Julia Version: 1.10.x
-# Active Project: /path/to/project
-# User Variables: x, y, my_function
-# Loaded Modules: 42
-# Worker ID: 2
+Julia Version: 1.12.2
+Active Project: /home/user/MyProject
+User Variables: x, fib, data
+Loaded Modules: 42
+Worker ID: 3
 ```
 
 ### `activate`
@@ -153,14 +198,15 @@ info()
 Switch the active Julia project/environment.
 
 ```
-# Activate current directory
 activate(path=".")
+# Activated project: /home/user/MyProject
+# Use `pkg(action="instantiate")` to install dependencies if needed.
 
-# Activate a specific project
-activate(path="/path/to/MyProject")
+activate(path="/path/to/OtherProject")
+# Activated project: /path/to/OtherProject
 
-# Activate a named shared environment
 activate(path="@v1.10")
+# Activated shared environment: @v1.10
 ```
 
 After activation, install dependencies with:
@@ -173,49 +219,75 @@ pkg(action="instantiate")
 Manage Julia packages in the current environment.
 
 ```
-# Add packages
-pkg(action="add", packages="JSON")
-pkg(action="add", packages="JSON, DataFrames, CSV")
-
-# Remove packages
-pkg(action="rm", packages="OldPackage")
-
-# Show package status
 pkg(action="status")
+# Package Status:
+# Project MyProject v0.1.0
+# Status `~/MyProject/Project.toml`
+#   [682c06a0] JSON3 v1.14.0
+#   [a93c6f00] DataFrames v1.6.1
 
-# Update all packages
-pkg(action="update")
+pkg(action="add", packages="CSV, HTTP")
+# Package add complete.
 
-# Update specific packages
-pkg(action="update", packages="JSON")
+pkg(action="test")
+# Test Summary: | Pass  Total
+# MyProject     |   42     42
 
-# Install dependencies from Project.toml/Manifest.toml
-pkg(action="instantiate")
+pkg(action="develop", packages="./MyLocalPackage")
+# Development mode: MyLocalPackage -> ~/MyLocalPackage
 
-# Resolve dependency graph
-pkg(action="resolve")
-
-# Run tests
-pkg(action="test")                     # Test current project
-pkg(action="test", packages="MyPkg")   # Test specific package
-
-# Development workflow
-pkg(action="develop", packages="./MyLocalPackage")  # Use local code
-pkg(action="free", packages="MyPackage")            # Return to registry
+pkg(action="free", packages="MyLocalPackage")
+# Freed MyLocalPackage from development mode
 ```
 
-Actions:
-- `add`: Install packages (packages parameter required)
-- `rm`: Remove packages (packages parameter required)
-- `status`: Show installed packages
-- `update`: Update packages (all if packages not specified)
-- `instantiate`: Download and precompile all dependencies from Project.toml/Manifest.toml
-- `resolve`: Resolve dependency graph and update Manifest.toml
-- `test`: Run package tests (current project if no packages specified)
-- `develop`: Put packages in development mode (use local code)
-- `free`: Exit development mode (return to registry version)
+**Actions:**
+| Action | Description | Packages Required |
+|--------|-------------|-------------------|
+| `add` | Install packages | Yes |
+| `rm` | Remove packages | Yes |
+| `status` | Show installed packages | No |
+| `update` | Update packages (all if not specified) | No |
+| `instantiate` | Install from Project.toml/Manifest.toml | No |
+| `resolve` | Resolve dependency graph | No |
+| `test` | Run tests (current project if not specified) | No |
+| `develop` | Use local code instead of registry | Yes |
+| `free` | Return to registry version | Yes |
 
-The `packages` parameter accepts space or comma-separated package names.
+The `packages` parameter accepts space or comma-separated names.
+
+### `log_viewer`
+
+Open a terminal showing Julia output in real-time.
+
+```
+log_viewer(mode="auto")
+# Log viewer enabled.
+# Log file: ~/.julia/logs/repl.log
+# A terminal window should have opened.
+
+log_viewer(mode="tmux")
+# tmux session 'julia-repl' created. Attach with: tmux attach -t julia-repl
+
+log_viewer(mode="file")
+# Log file: ~/.julia/logs/repl.log
+# Run manually: tail -f ~/.julia/logs/repl.log
+
+log_viewer(mode="off")
+# Log viewer disabled.
+```
+
+Useful for seeing printed output as it happens, especially for long-running computations.
+
+### `mode` (Deprecated)
+
+Switch between execution modes at runtime. **Not recommended** - tmux mode has unfixable issues.
+
+```
+mode(mode="distributed")   # Default, recommended
+mode(mode="tmux")          # Deprecated - use log_viewer instead
+```
+
+Use distributed mode with `log_viewer` for visual output.
 
 ## Configuration
 
@@ -416,23 +488,41 @@ AgentREPL.start_server(project_dir="/path/to/myproject")
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `JULIA_REPL_PROJECT` | Path to Julia project to activate on startup | None |
-| `JULIA_REPL_MODE` | Execution mode: `distributed` or `tmux` | `distributed` |
 | `JULIA_REPL_VIEWER` | Log viewer mode: `auto`, `tmux`, `file`, `none` | `none` |
 | `JULIA_REPL_LOG` | Path to log file | `~/.julia/logs/repl.log` |
+
+For visual output, set `JULIA_REPL_VIEWER=auto` to open a terminal showing real-time Julia output.
 
 ### Internal Architecture
 
 For developers extending AgentREPL:
 
-| Component | Description |
-|-----------|-------------|
-| `WorkerState` | Manages worker subprocess ID and project path |
-| `LogViewerState` | Manages optional log viewer terminal |
-| `TmuxREPLState` | State for tmux-based REPL mode |
-| `ensure_worker!()` | Ensures worker exists, spawns if needed |
-| `capture_eval_on_worker(code)` | Evaluates code with output capture |
-| `reset_worker!()` | Kills and respawns worker |
-| `activate_project_on_worker!(path)` | Switches worker environment |
+**File Structure:**
+```
+src/
+  AgentREPL.jl           # Main module (imports, includes, exports)
+  types.jl               # State structs (WorkerState, LogViewerState, etc.)
+  formatting.jl          # Result formatting, stacktrace truncation
+  worker.jl              # Distributed worker lifecycle
+  packages.jl            # Pkg actions, project activation
+  logging.jl             # Log viewer functionality
+  tools.jl               # MCP tool definitions
+  server.jl              # start_server function
+  deprecated/
+    tmux.jl              # Deprecated tmux bidirectional REPL
+```
+
+**Key Components:**
+
+| Component | File | Description |
+|-----------|------|-------------|
+| `WorkerState` | types.jl | Manages worker subprocess ID and project path |
+| `LogViewerState` | types.jl | Manages optional log viewer terminal |
+| `TmuxREPLState` | types.jl | State for deprecated tmux mode |
+| `ensure_worker!()` | worker.jl | Ensures worker exists, spawns if needed |
+| `capture_eval_on_worker(code)` | worker.jl | Evaluates code with output capture |
+| `reset_worker!()` | worker.jl | Kills and respawns worker |
+| `activate_project_on_worker!(path)` | packages.jl | Switches worker environment |
 
 All functions have docstrings accessible via `?function_name` in the Julia REPL.
 

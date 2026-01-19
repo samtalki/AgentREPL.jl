@@ -10,32 +10,33 @@ This skill provides guidance for using the persistent Julia REPL via MCP tools. 
 
 ## Architecture
 
-AgentREPL supports two modes:
+AgentREPL uses a **distributed worker model** (recommended):
 
-### Distributed Mode (Default)
+### Distributed Mode (Default, Recommended)
 - The MCP server runs in the main process (STDIO transport)
 - Code evaluation happens in a spawned worker process (via Distributed.jl)
 - `reset` kills the worker and spawns a fresh one (true hard reset)
-- Use `log_viewer` tool to open a terminal showing output
+- Use `log_viewer` tool to open a terminal showing output in real-time
 
-### Tmux Mode (Bidirectional)
-- A visible Julia REPL runs in a tmux session
-- **You can type commands directly** in the terminal window
-- Claude can also send commands and see the output
-- Both human and AI share the same interactive session
+### Visual Output with Log Viewer
 
-### Switching Modes at Runtime
-
-You can switch between modes without restarting Claude Code:
+To see Julia output as it happens:
 ```
-mode(mode="tmux")       # Switch to tmux (opens terminal)
-mode(mode="distributed") # Switch back to distributed
+log_viewer(mode="auto")   # Opens a terminal with live output
 ```
 
-Or set the default mode via environment variable before starting:
-```bash
-JULIA_REPL_MODE=tmux claude
-```
+Or set `JULIA_REPL_VIEWER=auto` environment variable before starting.
+
+### Tmux Mode (DEPRECATED)
+
+**Warning:** Tmux mode is deprecated and disabled by default.
+
+The tmux bidirectional REPL has unfixable marker pollution issues - the completion detection marker is always visible in the terminal output.
+
+**Use distributed mode with log viewer instead** for visual output.
+
+To force-enable tmux (not recommended):
+- Set `JULIA_REPL_ENABLE_TMUX=true` environment variable
 
 Both modes support **type redefinition** after reset.
 

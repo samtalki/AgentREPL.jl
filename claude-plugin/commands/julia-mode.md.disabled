@@ -1,0 +1,32 @@
+---
+name: julia-mode
+description: Switch between distributed and tmux REPL modes
+allowed_tools:
+  - mcp__plugin_julia_julia-repl__mode
+---
+
+# Julia Mode Switching
+
+Switch REPL execution mode using the `mode` tool.
+
+## Modes
+
+- **distributed** (default, recommended): Headless worker subprocess via Distributed.jl
+- **tmux** (DEPRECATED): Visible terminal with bidirectional Julia REPL
+
+## Deprecation Warning
+
+**Tmux mode is deprecated** and disabled by default due to unfixable marker pollution issues (the completion detection marker is always visible in the terminal output).
+
+**Recommended alternative**: Use distributed mode with the log viewer for visual output:
+- Use `log_viewer(mode="auto")` to open a terminal showing output
+- Or set `JULIA_REPL_VIEWER=auto` environment variable
+
+To force-enable tmux mode (not recommended):
+- Set `JULIA_REPL_ENABLE_TMUX=true` environment variable
+
+## Usage
+
+$ARGUMENTS is the target mode: `distributed` (recommended) or `tmux` (deprecated)
+
+Call the mode tool with the requested mode.

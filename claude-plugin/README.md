@@ -32,6 +32,8 @@ The plugin automatically configures the `julia-repl` MCP server which provides:
 - `info` - Get session information (including worker ID)
 - `pkg` - Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
 - `activate` - Switch project/environment
+- `log_viewer` - Open a terminal showing Julia output in real-time
+- `mode` - Switch between distributed and tmux modes (tmux is deprecated)
 
 ### Commands
 
@@ -39,6 +41,7 @@ The plugin automatically configures the `julia-repl` MCP server which provides:
 - `/julia-info` - Show session information
 - `/julia-pkg <action> [packages]` - Package management
 - `/julia-activate <path>` - Activate a project/environment
+- `/julia-mode <mode>` - Switch execution mode (distributed recommended, tmux deprecated)
 
 ### Skill
 
@@ -76,6 +79,28 @@ On first use, Claude will ask about your environment preference:
 - Type definitions CAN be changed after reset (unlike soft resets)
 - Activated environment persists even across reset
 - First evaluation is slow (TTFX), subsequent ones are fast
+
+## Visual Output (Log Viewer)
+
+To see Julia output in real-time, use the log viewer:
+
+```
+# Open a terminal showing output as it happens
+log_viewer(mode="auto")
+```
+
+This opens a tmux session or terminal with `tail -f ~/.julia/logs/repl.log`.
+
+## Tmux Mode (Deprecated)
+
+**Note:** Tmux bidirectional REPL mode is deprecated due to unfixable marker pollution issues.
+
+Use distributed mode (default) with the log viewer for visual output instead:
+- Set `JULIA_REPL_VIEWER=auto` environment variable, OR
+- Use the `log_viewer` tool at runtime
+
+To force-enable tmux mode (not recommended):
+- Set `JULIA_REPL_ENABLE_TMUX=true` environment variable
 
 ## Package Management
 

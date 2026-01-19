@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Julia syntax highlighting** for code in REPL output
+  - New `src/highlighting.jl` module using JuliaSyntaxHighlighting.jl (official Julia package)
+  - Highlights keywords, strings, comments, numbers in both headless and logger output
+  - Environment variable configuration:
+    - `JULIA_REPL_HIGHLIGHT`: Enable/disable highlighting (default: "true")
+    - `JULIA_REPL_OUTPUT_FORMAT`: Output format - "ansi", "markdown", or "plain" (default: "ansi")
+  - ANSI format for terminal color output (logger and headless)
+  - Markdown format wraps code in ` ```julia ` fences (for future Claude Code markdown rendering)
+  - Graceful degradation to plain text if highlighting fails
+
+### Changed
+- `format_result()` now applies syntax highlighting to code input
+- `log_interaction()` now applies ANSI syntax highlighting for terminal viewer
+
+## [0.4.0] - 2025-01-19
+
+### Added
+- Split monolithic `src/AgentREPL.jl` into logical modules for better maintainability:
+  - `types.jl` - State structs and global constants
+  - `formatting.jl` - Result formatting and stacktrace truncation
+  - `worker.jl` - Distributed worker lifecycle management
+  - `packages.jl` - Package management and project activation
+  - `logging.jl` - Log viewer functionality
+  - `tools.jl` - MCP tool definitions
+  - `server.jl` - Server startup function
+  - `deprecated/tmux.jl` - Deprecated tmux REPL code
+- `JULIA_REPL_ENABLE_TMUX` environment variable to opt-in to deprecated tmux mode
+
+### Deprecated
+- **Tmux bidirectional REPL mode** is now deprecated and disabled by default
+  - The tmux mode has unfixable marker pollution issues (completion detection marker visible in terminal)
+  - Use distributed mode with `log_viewer` tool or `JULIA_REPL_VIEWER=auto` for visual output
+  - Set `JULIA_REPL_ENABLE_TMUX=true` to force-enable (not recommended)
+
+### Changed
+- Main `src/AgentREPL.jl` reduced from 1556 lines to 64 lines (module shell with includes)
+- Updated all documentation to reflect new file structure and tmux deprecation
+
 ## [0.3.0] - 2025-01-19
 
 ### Added
@@ -60,7 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comparison documentation with alternative packages
 - SECURITY.md with security considerations
 
-[Unreleased]: https://github.com/samtalki/AgentREPL.jl/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/samtalki/AgentREPL.jl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/samtalki/AgentREPL.jl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/samtalki/AgentREPL.jl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/samtalki/AgentREPL.jl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/samtalki/AgentREPL.jl/releases/tag/v0.1.0
