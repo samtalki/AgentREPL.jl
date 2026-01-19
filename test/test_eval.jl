@@ -53,24 +53,47 @@ end
 
 @testset "Result Formatting" begin
     @testset "Success with value" begin
-        result = AgentREPL.format_result("1 + 1", "42", "", nothing)
-        @test contains(result, "Code:")
-        @test contains(result, "1 + 1")
-        @test contains(result, "Result: 42")
+        result = AgentREPL.format_result("42", "", nothing)
+        @test contains(result, "→ 42")  # Arrow prefix for results
+        @test !contains(result, "Code:")  # Code should not be included
     end
 
     @testset "Success with output" begin
-        result = AgentREPL.format_result("println(\"Hello!\")", "nothing", "Hello!", nothing)
-        @test contains(result, "Code:")
+        result = AgentREPL.format_result("nothing", "Hello!", nothing)
         @test contains(result, "Output:")
         @test contains(result, "Hello!")
     end
 
     @testset "Error formatting" begin
-        result = AgentREPL.format_result("bad_code()", "nothing", "", "UndefVarError: `bad_code` not defined")
-        @test contains(result, "Code:")
-        @test contains(result, "Error:")
+        result = AgentREPL.format_result("nothing", "", "UndefVarError: `bad_code` not defined")
         @test contains(result, "bad_code")
+        @test !contains(result, "Code:")  # Code should not be included
+    end
+
+    @testset "Stacktrace truncation" begin
+        long_error = """
+LoadError: UndefVarError: `foo` not defined
+Stacktrace:
+  [1] frame1()
+    @ Main ./file.jl:1
+  [2] frame2()
+    @ Main ./file.jl:2
+  [3] frame3()
+    @ Main ./file.jl:3
+  [4] frame4()
+    @ Main ./file.jl:4
+  [5] frame5()
+    @ Main ./file.jl:5
+  [6] frame6()
+    @ Main ./file.jl:6
+  [7] frame7()
+    @ Main ./file.jl:7
+"""
+        truncated = AgentREPL.truncate_stacktrace(long_error; max_frames=3)
+        @test contains(truncated, "frame1")
+        @test contains(truncated, "frame3")
+        @test !contains(truncated, "frame7")
+        @test contains(truncated, "truncated")
     end
 end
 

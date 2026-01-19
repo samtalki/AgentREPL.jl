@@ -392,13 +392,65 @@ using AgentREPL
 AgentREPL.start_server()  # Blocks, waiting for MCP messages on stdin
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guidelines.
+
+## API Reference
+
+### Exported Functions
+
+#### `start_server(; project_dir=nothing)`
+
+Start the AgentREPL MCP server using STDIO transport.
+
+**Arguments:**
+- `project_dir::Union{String,Nothing}`: Optional path to a Julia project to activate on the worker
+
+**Example:**
+```julia
+using AgentREPL
+AgentREPL.start_server(project_dir="/path/to/myproject")
+```
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `JULIA_REPL_PROJECT` | Path to Julia project to activate on startup | None |
+| `JULIA_REPL_MODE` | Execution mode: `distributed` or `tmux` | `distributed` |
+| `JULIA_REPL_VIEWER` | Log viewer mode: `auto`, `tmux`, `file`, `none` | `none` |
+| `JULIA_REPL_LOG` | Path to log file | `~/.julia/logs/repl.log` |
+
+### Internal Architecture
+
+For developers extending AgentREPL:
+
+| Component | Description |
+|-----------|-------------|
+| `WorkerState` | Manages worker subprocess ID and project path |
+| `LogViewerState` | Manages optional log viewer terminal |
+| `TmuxREPLState` | State for tmux-based REPL mode |
+| `ensure_worker!()` | Ensures worker exists, spawns if needed |
+| `capture_eval_on_worker(code)` | Evaluates code with output capture |
+| `reset_worker!()` | Kills and respawns worker |
+| `activate_project_on_worker!(path)` | Switches worker environment |
+
+All functions have docstrings accessible via `?function_name` in the Julia REPL.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history and release notes.
+
 ## License
 
 Apache License 2.0 - See [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Contributions welcome! Please open an issue or PR on GitHub.
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on:
+- Setting up the development environment
+- Code style and documentation standards
+- Pull request process
+- Adding new features
 
 ## Acknowledgments
 

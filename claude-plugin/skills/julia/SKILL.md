@@ -10,13 +10,26 @@ This skill provides guidance for using the persistent Julia REPL via MCP tools. 
 
 ## Architecture
 
-AgentREPL uses a **worker subprocess model**:
+AgentREPL supports two modes:
+
+### Distributed Mode (Default)
 - The MCP server runs in the main process (STDIO transport)
 - Code evaluation happens in a spawned worker process (via Distributed.jl)
 - `reset` kills the worker and spawns a fresh one (true hard reset)
-- `activate` switches the worker's active project/environment
+- Use `log_viewer` tool to open a terminal showing output
 
-This architecture enables **type redefinition** after reset, which is impossible with soft resets.
+### Tmux Mode (Bidirectional)
+- A visible Julia REPL runs in a tmux session
+- **You can type commands directly** in the terminal window
+- Claude can also send commands and see the output
+- Both human and AI share the same interactive session
+
+To enable tmux mode, set the environment variable before starting Claude Code:
+```bash
+JULIA_REPL_MODE=tmux claude
+```
+
+Both modes support **type redefinition** after reset.
 
 ## Available Tools
 
@@ -27,6 +40,7 @@ This architecture enables **type redefinition** after reset, which is impossible
 | `info` | Get session info (version, project, variables, worker ID) |
 | `pkg` | Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free) |
 | `activate` | Switch active project/environment |
+| `log_viewer` | Open a terminal window showing Julia output in real-time (distributed mode only) |
 
 ## Critical: Show Code Before Evaluation
 

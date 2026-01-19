@@ -45,16 +45,660 @@ module AgentREPL
 using ModelContextProtocol
 using Distributed
 using Pkg
+using Dates
 
 export start_server
 
-# Worker management
+"""
+    WorkerState
+
+Mutable state container for the worker subprocess.
+
+# Fields
+- `worker_id::Union{Int, Nothing}`: The Distributed.jl worker process ID, or `nothing` if no worker exists
+- `project_path::Union{String, Nothing}`: Path to the active Julia project/environment, persists across resets
+"""
 mutable struct WorkerState
     worker_id::Union{Int, Nothing}
     project_path::Union{String, Nothing}
 end
 
+"""
+    WORKER::WorkerState
+
+Global state for the worker subprocess. Access via `ensure_worker!()` rather than directly.
+"""
 const WORKER = WorkerState(nothing, nothing)
+
+"""
+    LogViewerState
+
+State for the optional log viewer feature that displays REPL output in a separate terminal.
+
+# Fields
+- `log_path::Union{String, Nothing}`: Path to the log file (default: `~/.julia/logs/repl.log`)
+- `log_io::Union{IO, Nothing}`: Open file handle for writing logs
+- `viewer_pid::Union{Int, Nothing}`: PID of the viewer process (if spawned)
+- `mode::Symbol`: Current mode - `:none`, `:file`, or `:tmux`
+"""
+mutable struct LogViewerState
+    log_path::Union{String, Nothing}
+    log_io::Union{IO, Nothing}
+    viewer_pid::Union{Int, Nothing}
+    mode::Symbol  # :none, :file, :tmux
+end
+
+"""
+    LOG_VIEWER::LogViewerState
+
+Global state for the log viewer. Configure via `setup_log_viewer!()`.
+"""
+const LOG_VIEWER = LogViewerState(nothing, nothing, nothing, :none)
+
+"""
+    TmuxREPLState
+
+State for the tmux-based bidirectional REPL mode (alternative to distributed worker model).
+
+# Fields
+- `session_name::String`: Name of the tmux session (default: `"julia-repl"`)
+- `active::Bool`: Whether the tmux session is currently running
+- `project_path::Union{String, Nothing}`: Path to the active Julia project
+- `terminal_opened::Bool`: Whether a terminal window has been opened for this session
+"""
+mutable struct TmuxREPLState
+    session_name::String
+    active::Bool
+    project_path::Union{String, Nothing}
+    terminal_opened::Bool
+end
+
+"""
+    TMUX_REPL::TmuxREPLState
+
+Global state for tmux-based REPL mode. Only used when `REPL_MODE[] == :tmux`.
+"""
+const TMUX_REPL = TmuxREPLState("julia-repl", false, nothing, false)
+
+"""
+    REPL_MODE::Ref{Symbol}
+
+Global REPL execution mode. Possible values:
+- `:distributed` (default): Uses Distributed.jl worker subprocess
+- `:tmux`: Uses tmux session for bidirectional REPL with visible terminal
+
+Set via `JULIA_REPL_MODE` environment variable before starting the server.
+"""
+const REPL_MODE = Ref{Symbol}(:distributed)
+
+"""
+    find_tmux() -> Union{String, Nothing}
+
+Find the tmux executable path.
+"""
+function find_tmux()
+    for path in ["/usr/bin/tmux", "/usr/local/bin/tmux", "/opt/homebrew/bin/tmux"]
+        if isfile(path)
+            return path
+        end
+    end
+    # Fallback: try to find via which
+    try
+        return strip(read(`which tmux`, String))
+    catch
+        return nothing
+    end
+end
+
+"""
+    TMUX_PATH::Ref{Union{String, Nothing}}
+
+Cached path to the tmux executable. Populated lazily by `get_tmux_path()`.
+"""
+const TMUX_PATH = Ref{Union{String, Nothing}}(nothing)
+
+"""
+    get_tmux_path() -> Union{String, Nothing}
+
+Get the cached tmux path, finding it if not yet cached.
+"""
+function get_tmux_path()
+    if TMUX_PATH[] === nothing
+        TMUX_PATH[] = find_tmux()
+    end
+    return TMUX_PATH[]
+end
+
+"""
+    has_tmux() -> Bool
+
+Check if tmux is available on the system.
+"""
+function has_tmux()
+    return get_tmux_path() !== nothing
+end
+
+"""
+    tmux_cmd(args...) -> Cmd
+
+Build a tmux command using the detected tmux path.
+"""
+function tmux_cmd(args...)
+    tmux = get_tmux_path()
+    if tmux === nothing
+        error("tmux not found")
+    end
+    return Cmd([tmux, args...])
+end
+
+"""
+    ensure_tmux_repl!(; open_terminal::Bool=true) -> Bool
+
+Ensure a tmux-based Julia REPL session exists. Creates one if needed.
+Returns true if session is ready, false if tmux is not available.
+"""
+function ensure_tmux_repl!(; open_terminal::Bool=true)
+    if !has_tmux()
+        @warn "tmux is not installed. Install it with: sudo dnf install tmux"
+        return false
+    end
+
+    # Check if session already exists and is running Julia
+    if TMUX_REPL.active
+        try
+            run(pipeline(`tmux has-session -t $(TMUX_REPL.session_name)`, devnull))
+            return true
+        catch
+            TMUX_REPL.active = false
+        end
+    end
+
+    # Kill any existing session with our name
+    try
+        run(ignorestatus(pipeline(`tmux kill-session -t $(TMUX_REPL.session_name)`, devnull)))
+    catch
+    end
+
+    # Build Julia command with project if specified
+    # Use shell quoting for tmux which passes to sh -c
+    julia_cmd = if TMUX_REPL.project_path !== nothing
+        "julia --project='$(TMUX_REPL.project_path)'"
+    else
+        "julia"
+    end
+
+    # Create new tmux session with Julia REPL
+    # tmux new-session runs the command through a shell, so we pass it as a single string
+    try
+        run(`tmux new-session -d -s $(TMUX_REPL.session_name) sh -c $julia_cmd`)
+        TMUX_REPL.active = true
+
+        # Wait for Julia to start (look for the prompt)
+        for _ in 1:50  # Up to 5 seconds
+            sleep(0.1)
+            pane_content = read(`tmux capture-pane -t $(TMUX_REPL.session_name) -p`, String)
+            if contains(pane_content, "julia>")
+                break
+            end
+        end
+
+        @info "Julia REPL started in tmux session '$(TMUX_REPL.session_name)'"
+    catch e
+        @error "Failed to create tmux session" exception=e
+        return false
+    end
+
+    # Open a visible terminal window if requested
+    if open_terminal && !TMUX_REPL.terminal_opened
+        if open_terminal_with_tmux_attach()
+            TMUX_REPL.terminal_opened = true
+        end
+    end
+
+    return true
+end
+
+"""
+    open_terminal_with_tmux_attach() -> Bool
+
+Open a terminal window attached to the Julia REPL tmux session.
+"""
+function open_terminal_with_tmux_attach()
+    terminal = find_terminal_emulator()
+    if terminal === nothing
+        @info "No terminal emulator found. Attach manually with: tmux attach -t $(TMUX_REPL.session_name)"
+        return false
+    end
+
+    try
+        session = TMUX_REPL.session_name
+        if Sys.isapple()
+            script = """
+            tell application "Terminal"
+                activate
+                do script "tmux attach -t $session"
+            end tell
+            """
+            run(pipeline(`osascript -e $script`, devnull))
+        elseif terminal == "gnome-terminal"
+            run(pipeline(`gnome-terminal -- tmux attach -t $session`, devnull); wait=false)
+        elseif terminal == "konsole"
+            run(pipeline(`konsole -e tmux attach -t $session`, devnull); wait=false)
+        elseif terminal == "xfce4-terminal"
+            run(pipeline(`xfce4-terminal -e "tmux attach -t $session"`, devnull); wait=false)
+        elseif terminal == "kitty"
+            run(pipeline(`kitty tmux attach -t $session`, devnull); wait=false)
+        elseif terminal == "alacritty"
+            run(pipeline(`alacritty -e tmux attach -t $session`, devnull); wait=false)
+        elseif terminal == "xterm"
+            run(pipeline(`xterm -e tmux attach -t $session`, devnull); wait=false)
+        end
+        @info "Opened terminal attached to Julia REPL (tmux session: $session)"
+        return true
+    catch e
+        @warn "Could not open terminal" exception=e
+        return false
+    end
+end
+
+"""
+    kill_tmux_repl!()
+
+Kill the tmux-based Julia REPL session.
+"""
+function kill_tmux_repl!()
+    if TMUX_REPL.active
+        try
+            run(ignorestatus(pipeline(`tmux kill-session -t $(TMUX_REPL.session_name)`, devnull)))
+        catch
+        end
+        TMUX_REPL.active = false
+        TMUX_REPL.terminal_opened = false
+    end
+end
+
+"""
+    generate_marker() -> String
+
+Generate a unique marker for detecting command completion.
+"""
+function generate_marker()
+    return "__DONE_$(rand(UInt64))__"
+end
+
+"""
+    eval_in_tmux(code::String; timeout::Float64=30.0) -> (value_str, output, error_str)
+
+Evaluate Julia code in the tmux REPL session.
+Returns (value_str, output, error_str) similar to capture_eval_on_worker.
+"""
+function eval_in_tmux(code::String; timeout::Float64=30.0)
+    if !ensure_tmux_repl!()
+        return ("nothing", "", "Error: tmux REPL not available")
+    end
+
+    session = TMUX_REPL.session_name
+    marker = generate_marker()
+
+    # Capture pane content before sending command (to find where new output starts)
+    pre_content = read(`tmux capture-pane -t $session -p -S -1000`, String)
+    pre_lines = length(split(pre_content, '\n'))
+
+    # Send the code (handle multi-line by sending each line)
+    code_lines = split(strip(code), '\n')
+    for line in code_lines
+        # Escape any special characters for tmux
+        escaped_line = replace(line, "'" => "'\\''")
+        run(`tmux send-keys -t $session $escaped_line Enter`)
+        sleep(0.05)  # Small delay between lines
+    end
+
+    # Send marker command to detect completion
+    run(`tmux send-keys -t $session "println(\"$marker\")" Enter`)
+
+    # Wait for marker to appear in output
+    start_time = time()
+    output_content = ""
+    found_marker = false
+
+    while (time() - start_time) < timeout
+        sleep(0.1)
+        current_content = read(`tmux capture-pane -t $session -p -S -1000`, String)
+
+        if contains(current_content, marker)
+            found_marker = true
+            output_content = current_content
+            break
+        end
+    end
+
+    if !found_marker
+        return ("nothing", "", "Error: Command timed out after $(timeout)s")
+    end
+
+    # Parse the output to extract result and printed output
+    # The output format in Julia REPL is:
+    # julia> <code>
+    # <output/result>
+    # julia> println("marker")
+    # marker
+
+    lines = split(output_content, '\n')
+
+    # Find where our code started (after the last julia> prompt before our code)
+    code_start_idx = 0
+    for (i, line) in enumerate(lines)
+        if startswith(strip(line), "julia>") && i > pre_lines - 10
+            # Check if this prompt has our code
+            rest = strip(replace(line, "julia>" => ""))
+            if !isempty(rest) && startswith(strip(code_lines[1]), strip(rest)[1:min(10, length(strip(rest)))])
+                code_start_idx = i
+                break
+            elseif isempty(rest) && i < length(lines)
+                # Multi-line input starts on next line
+                code_start_idx = i
+                break
+            end
+        end
+    end
+
+    # Find marker line
+    marker_idx = 0
+    for (i, line) in enumerate(lines)
+        if contains(line, marker)
+            marker_idx = i
+            break
+        end
+    end
+
+    # Extract output between code and marker
+    if code_start_idx > 0 && marker_idx > code_start_idx
+        # Skip the code lines and the println marker command
+        output_start = code_start_idx + length(code_lines)
+        output_end = marker_idx - 2  # Skip "julia> println..." and marker itself
+
+        if output_end >= output_start
+            output_lines = lines[output_start:output_end]
+            # Filter out empty lines and julia> prompts
+            output_lines = filter(l -> !isempty(strip(l)) && !startswith(strip(l), "julia>"), output_lines)
+
+            # The last non-empty line is typically the result
+            if !isempty(output_lines)
+                # Check for errors
+                full_output = join(output_lines, '\n')
+                if contains(full_output, "ERROR:") || contains(full_output, "LoadError") || contains(full_output, "UndefVarError")
+                    return ("nothing", "", strip(full_output))
+                end
+
+                # Separate printed output from return value
+                # Return value is usually the last line
+                if length(output_lines) == 1
+                    return (strip(output_lines[1]), "", nothing)
+                else
+                    result = strip(output_lines[end])
+                    printed = join(output_lines[1:end-1], '\n')
+                    return (result, strip(printed), nothing)
+                end
+            end
+        end
+    end
+
+    return ("nothing", "", nothing)
+end
+
+"""
+    get_default_log_path() -> String
+
+Get the default path for the REPL log file.
+"""
+function get_default_log_path()
+    log_dir = joinpath(homedir(), ".julia", "logs")
+    mkpath(log_dir)
+    return joinpath(log_dir, "repl.log")
+end
+
+"""
+    setup_log_viewer!(; mode::Symbol=:auto, log_path::Union{String,Nothing}=nothing)
+
+Set up the log viewer for the Julia REPL session.
+
+Modes:
+- `:auto` - Try tmux first, fall back to opening a terminal with tail -f
+- `:tmux` - Use tmux (creates session "julia-repl")
+- `:file` - Just log to file, user manually runs tail -f
+- `:none` - Disable logging
+
+Returns the log file path if logging is enabled.
+"""
+function setup_log_viewer!(; mode::Symbol=:auto, log_path::Union{String,Nothing}=nothing)
+    # Close existing log if open
+    if LOG_VIEWER.log_io !== nothing
+        close(LOG_VIEWER.log_io)
+        LOG_VIEWER.log_io = nothing
+    end
+
+    if mode == :none
+        LOG_VIEWER.mode = :none
+        LOG_VIEWER.log_path = nothing
+        return nothing
+    end
+
+    # Set up log file
+    path = something(log_path, get_default_log_path())
+    LOG_VIEWER.log_path = path
+    LOG_VIEWER.log_io = open(path, "w")
+
+    # Write header
+    println(LOG_VIEWER.log_io, "="^60)
+    println(LOG_VIEWER.log_io, "Julia REPL Session - $(Dates.now())")
+    println(LOG_VIEWER.log_io, "="^60)
+    println(LOG_VIEWER.log_io)
+    flush(LOG_VIEWER.log_io)
+
+    if mode == :auto
+        # Try tmux first, then terminal
+        if try_open_tmux_viewer(path)
+            LOG_VIEWER.mode = :tmux
+        elseif try_open_terminal_viewer(path)
+            LOG_VIEWER.mode = :file
+        else
+            LOG_VIEWER.mode = :file
+            @warn "Could not auto-open log viewer. Run manually: tail -f $path"
+        end
+    elseif mode == :tmux
+        if try_open_tmux_viewer(path)
+            LOG_VIEWER.mode = :tmux
+        else
+            LOG_VIEWER.mode = :file
+            @warn "tmux not available. Run manually: tail -f $path"
+        end
+    else  # :file
+        LOG_VIEWER.mode = :file
+        if !try_open_terminal_viewer(path)
+            @warn "Could not auto-open terminal. Run manually: tail -f $path"
+        end
+    end
+
+    return path
+end
+
+"""
+    find_terminal_emulator() -> Union{String, Nothing}
+
+Find an available terminal emulator on the system.
+"""
+function find_terminal_emulator()
+    if Sys.islinux()
+        # Try common terminal emulators in order of preference
+        terminals = ["gnome-terminal", "konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]
+        for term in terminals
+            try
+                run(pipeline(`which $term`, devnull))
+                return term
+            catch
+            end
+        end
+    elseif Sys.isapple()
+        return "Terminal.app"  # Always available on macOS
+    end
+    return nothing
+end
+
+"""
+    try_open_tmux_viewer(log_path::String) -> Bool
+
+Try to open a tmux session showing the log file in a visible terminal window.
+"""
+function try_open_tmux_viewer(log_path::String)
+    # Check if tmux is available
+    try
+        run(pipeline(`which tmux`, devnull))
+    catch
+        return false
+    end
+
+    # Kill existing julia-repl session if any
+    try
+        run(ignorestatus(pipeline(`tmux kill-session -t julia-repl`, devnull)))
+    catch
+    end
+
+    # Create new tmux session in detached mode
+    try
+        run(`tmux new-session -d -s julia-repl tail -f $log_path`)
+    catch
+        return false
+    end
+
+    # Now open a terminal window attached to the tmux session
+    terminal = find_terminal_emulator()
+    if terminal === nothing
+        @info "tmux session 'julia-repl' created. Attach with: tmux attach -t julia-repl"
+        return true
+    end
+
+    # Open terminal with tmux attach
+    try
+        if Sys.isapple()
+            script = """
+            tell application "Terminal"
+                activate
+                do script "tmux attach -t julia-repl"
+            end tell
+            """
+            run(pipeline(`osascript -e $script`, devnull))
+        elseif terminal == "gnome-terminal"
+            run(pipeline(`gnome-terminal -- tmux attach -t julia-repl`, devnull); wait=false)
+        elseif terminal == "konsole"
+            run(pipeline(`konsole -e tmux attach -t julia-repl`, devnull); wait=false)
+        elseif terminal == "xfce4-terminal"
+            run(pipeline(`xfce4-terminal -e "tmux attach -t julia-repl"`, devnull); wait=false)
+        elseif terminal == "kitty"
+            run(pipeline(`kitty tmux attach -t julia-repl`, devnull); wait=false)
+        elseif terminal == "alacritty"
+            run(pipeline(`alacritty -e tmux attach -t julia-repl`, devnull); wait=false)
+        elseif terminal == "xterm"
+            run(pipeline(`xterm -e tmux attach -t julia-repl`, devnull); wait=false)
+        end
+        @info "Opened Julia REPL viewer in $terminal (tmux session: julia-repl)"
+        return true
+    catch e
+        @warn "Could not open terminal window" terminal exception=e
+        @info "tmux session 'julia-repl' created. Attach manually with: tmux attach -t julia-repl"
+        return true  # tmux session exists, just couldn't open terminal
+    end
+end
+
+"""
+    try_open_terminal_viewer(log_path::String) -> Bool
+
+Try to open a terminal emulator showing tail -f of the log file (no tmux).
+"""
+function try_open_terminal_viewer(log_path::String)
+    terminal = find_terminal_emulator()
+    if terminal === nothing
+        return false
+    end
+
+    try
+        if Sys.isapple()
+            script = """
+            tell application "Terminal"
+                activate
+                do script "tail -f '$log_path'"
+            end tell
+            """
+            run(pipeline(`osascript -e $script`, devnull))
+        elseif terminal == "gnome-terminal"
+            run(pipeline(`gnome-terminal -- tail -f $log_path`, devnull); wait=false)
+        elseif terminal == "konsole"
+            run(pipeline(`konsole -e tail -f $log_path`, devnull); wait=false)
+        elseif terminal == "xfce4-terminal"
+            run(pipeline(`xfce4-terminal -e "tail -f $log_path"`, devnull); wait=false)
+        elseif terminal == "kitty"
+            run(pipeline(`kitty tail -f $log_path`, devnull); wait=false)
+        elseif terminal == "alacritty"
+            run(pipeline(`alacritty -e tail -f $log_path`, devnull); wait=false)
+        elseif terminal == "xterm"
+            run(pipeline(`xterm -e tail -f $log_path`, devnull); wait=false)
+        end
+        @info "Opened Julia REPL viewer in $terminal"
+        return true
+    catch e
+        @warn "Could not open terminal window" terminal exception=e
+        return false
+    end
+end
+
+"""
+    log_interaction(code::String, value_str::String, output::String, error_str::Union{String,Nothing})
+
+Log an interaction to the log file if logging is enabled.
+"""
+function log_interaction(code::String, value_str::String, output::String, error_str::Union{String,Nothing})
+    LOG_VIEWER.log_io === nothing && return
+
+    io = LOG_VIEWER.log_io
+    println(io, "─"^60)
+    println(io, "julia> ", replace(strip(code), "\n" => "\n       "))
+    println(io)
+
+    if error_str !== nothing
+        println(io, "ERROR: ", error_str)
+    else
+        if !isempty(strip(output))
+            println(io, strip(output))
+        end
+        println(io, value_str)
+    end
+    println(io)
+    flush(io)
+end
+
+"""
+    close_log_viewer!()
+
+Close the log viewer and clean up.
+"""
+function close_log_viewer!()
+    if LOG_VIEWER.log_io !== nothing
+        println(LOG_VIEWER.log_io, "\n", "="^60)
+        println(LOG_VIEWER.log_io, "Session ended - $(Dates.now())")
+        println(LOG_VIEWER.log_io, "="^60)
+        close(LOG_VIEWER.log_io)
+        LOG_VIEWER.log_io = nothing
+    end
+
+    # Kill tmux session if we created one
+    if LOG_VIEWER.mode == :tmux
+        try
+            run(ignorestatus(pipeline(`tmux kill-session -t julia-repl`, devnull)))
+        catch
+        end
+    end
+
+    LOG_VIEWER.mode = :none
+end
 
 """
     ensure_worker!() -> Int
@@ -178,30 +822,83 @@ function capture_eval_on_worker(code::String)
 end
 
 """
-    format_result(code::String, value_str::String, output::String, error_str::Union{String,Nothing}) -> String
+    truncate_stacktrace(error_str::String; max_frames::Int=5) -> String
+
+Truncate a stacktrace to the most relevant frames.
+Keeps the error message and first few frames, adds note if truncated.
+"""
+function truncate_stacktrace(error_str::String; max_frames::Int=5)
+    lines = split(error_str, '\n')
+
+    # Find where stacktrace starts (after "Stacktrace:")
+    stacktrace_idx = findfirst(l -> startswith(strip(l), "Stacktrace:"), lines)
+
+    if stacktrace_idx === nothing
+        return error_str  # No stacktrace, return as-is
+    end
+
+    # Keep error message and "Stacktrace:" line
+    result_lines = lines[1:stacktrace_idx]
+
+    # Count frames (lines starting with [N])
+    remaining_lines = lines[stacktrace_idx+1:end]
+    frame_count = 0
+    last_included_idx = 0
+
+    for (i, line) in enumerate(remaining_lines)
+        if occursin(r"^\s*\[\d+\]", line)
+            frame_count += 1
+            if frame_count <= max_frames
+                last_included_idx = i
+            end
+        elseif frame_count <= max_frames
+            last_included_idx = i
+        end
+    end
+
+    if frame_count > max_frames
+        append!(result_lines, remaining_lines[1:last_included_idx])
+        push!(result_lines, "  ... ($(frame_count - max_frames) more frames truncated)")
+    else
+        append!(result_lines, remaining_lines)
+    end
+
+    return join(result_lines, '\n')
+end
+
+"""
+    format_result(value_str::String, output::String, error_str::Union{String,Nothing}) -> String
 
 Format the evaluation result for display to the user.
-Shows result first for better visibility in collapsed view, then output, then code.
+Compact plain-text format (markdown isn't rendered in MCP tool output).
+Code is NOT included since the caller shows it before the tool call.
 """
-function format_result(code::String, value_str::String, output::String, error_str::Union{String,Nothing})
+function format_result(value_str::String, output::String, error_str::Union{String,Nothing})
     result_parts = String[]
 
-    # Show error or result FIRST for visibility in collapsed output
     if error_str !== nothing
-        push!(result_parts, "Error: $error_str")
+        truncated_error = truncate_stacktrace(error_str)
+        push!(result_parts, truncated_error)
     else
-        push!(result_parts, "Result: $value_str")
+        push!(result_parts, "→ $value_str")
     end
 
-    # Include printed output (may exist even if there's an error)
+    # Include printed output inline for compactness (visible in collapsed view)
     if !isempty(strip(output))
-        push!(result_parts, "Output:\n$output")
+        output_lines = split(strip(output), '\n')
+        if length(output_lines) == 1
+            # Single line: inline with label
+            push!(result_parts, "Output: $(output_lines[1])")
+        else
+            # Multiple lines: first line inline, rest below
+            push!(result_parts, "Output: $(output_lines[1])")
+            for line in output_lines[2:end]
+                push!(result_parts, line)
+            end
+        end
     end
 
-    # Show code last (user already saw it before approving)
-    push!(result_parts, "Code:\n```julia\n$(strip(code))\n```")
-
-    return join(result_parts, "\n\n")
+    return join(result_parts, "\n")
 end
 
 """
@@ -398,7 +1095,29 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
         WORKER.project_path = project_dir
     end
 
-    # NOTE: Worker is spawned lazily on first tool use to avoid
+    # Check for REPL mode environment variable
+    # JULIA_REPL_MODE: "distributed" (default) or "tmux" (bidirectional with visible terminal)
+    repl_mode_str = get(ENV, "JULIA_REPL_MODE", "distributed")
+    REPL_MODE[] = Symbol(repl_mode_str)
+
+    if REPL_MODE[] == :tmux
+        # Set project path for tmux REPL
+        TMUX_REPL.project_path = project_dir
+        @info "Using tmux-based bidirectional REPL mode"
+    else
+        # Check for log viewer environment variables (only for distributed mode)
+        # JULIA_REPL_VIEWER: "auto", "tmux", "file", "none" (default: "none")
+        # JULIA_REPL_LOG: path to log file (default: ~/.julia/logs/repl.log)
+        viewer_mode_str = get(ENV, "JULIA_REPL_VIEWER", "none")
+        viewer_mode = Symbol(viewer_mode_str)
+        log_path = get(ENV, "JULIA_REPL_LOG", nothing)
+
+        if viewer_mode != :none
+            setup_log_viewer!(; mode=viewer_mode, log_path=log_path)
+        end
+    end
+
+    # NOTE: Worker/tmux session is spawned lazily on first tool use to avoid
     # conflicts with MCP STDIO transport during startup
 
     # Tool: Evaluate Julia code
@@ -434,13 +1153,20 @@ Use this for iterative development, testing, and exploration.
                 return TextContent(text = "Error: 'code' parameter cannot be empty")
             end
 
-            value_str, output, error_str = capture_eval_on_worker(code)
-            result = format_result(code, value_str, output, error_str)
+            # Use appropriate backend based on mode
+            if REPL_MODE[] == :tmux
+                value_str, output, error_str = eval_in_tmux(code)
+            else
+                value_str, output, error_str = capture_eval_on_worker(code)
+                log_interaction(code, value_str, output, error_str)
+            end
+
+            result = format_result(value_str, output, error_str)
             TextContent(text = result)
         end
     )
 
-    # Tool: Hard reset (kill and respawn worker)
+    # Tool: Hard reset (kill and respawn worker/session)
     reset_tool = MCPTool(
         name = "reset",
         description = """
@@ -456,21 +1182,37 @@ Use this when you need a clean slate or to redefine types/structs.
 """,
         parameters = [],
         handler = _ -> begin
-            old_id = WORKER.worker_id
-            new_id = reset_worker!()
+            if REPL_MODE[] == :tmux
+                kill_tmux_repl!()
+                ensure_tmux_repl!()
 
-            msg = """
+                msg = """
+Session reset complete (tmux mode).
+- Julia REPL session restarted
+- All variables, functions, and types cleared
+- Packages will need to be reloaded with `using`
+"""
+                if TMUX_REPL.project_path !== nothing
+                    msg *= "- Project: $(TMUX_REPL.project_path)\n"
+                end
+                TextContent(text = msg)
+            else
+                old_id = WORKER.worker_id
+                new_id = reset_worker!()
+
+                msg = """
 Session reset complete.
 - Old worker (ID: $old_id) terminated
 - New worker (ID: $new_id) spawned
 - All variables, functions, and types cleared
 - Packages will need to be reloaded with `using`
 """
-            if WORKER.project_path !== nothing
-                msg *= "- Project re-activated: $(WORKER.project_path)\n"
-            end
+                if WORKER.project_path !== nothing
+                    msg *= "- Project re-activated: $(WORKER.project_path)\n"
+                end
 
-            TextContent(text = msg)
+                TextContent(text = msg)
+            end
         end
     )
 
@@ -659,12 +1401,59 @@ After activation, use `pkg(action="instantiate")` to install dependencies.
         end
     )
 
+    # Tool: Log viewer control
+    log_viewer_tool = MCPTool(
+        name = "log_viewer",
+        description = """
+Open a separate terminal window showing Julia REPL output in real-time.
+
+This opens a log viewer so you can see Julia output outside of the MCP response.
+Modes:
+- "auto": Try tmux first, then open a terminal with tail -f
+- "tmux": Create a tmux session (attach with: tmux attach -t julia-repl)
+- "file": Just enable logging, user opens tail -f manually
+- "off": Disable the log viewer
+
+The log file is written to ~/.julia/logs/repl.log by default.
+""",
+        parameters = [
+            ToolParameter(
+                name = "mode",
+                type = "string",
+                description = "Viewer mode: 'auto', 'tmux', 'file', or 'off'",
+                required = true
+            )
+        ],
+        handler = params -> begin
+            mode_str = get(params, "mode", "auto")
+            if mode_str == "off"
+                close_log_viewer!()
+                return TextContent(text = "Log viewer disabled.")
+            end
+
+            mode = Symbol(mode_str)
+            if mode ∉ [:auto, :tmux, :file]
+                return TextContent(text = "Error: mode must be 'auto', 'tmux', 'file', or 'off'")
+            end
+
+            path = setup_log_viewer!(; mode=mode)
+
+            if LOG_VIEWER.mode == :tmux
+                TextContent(text = "Log viewer enabled (tmux).\nLog file: $path\nAttach with: tmux attach -t julia-repl")
+            elseif LOG_VIEWER.mode == :file
+                TextContent(text = "Log viewer enabled.\nLog file: $path\nA terminal window should have opened. If not, run: tail -f $path")
+            else
+                TextContent(text = "Log viewer enabled.\nLog file: $path\nRun in another terminal: tail -f $path")
+            end
+        end
+    )
+
     # Create and start the server
     server = mcp_server(
         name = "julia-repl",
         version = "0.3.0",
         description = "Persistent Julia REPL for AI agents - eliminates TTFX",
-        tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool]
+        tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool, log_viewer_tool]
     )
 
     @info "AgentREPL server starting..." julia_version=VERSION
