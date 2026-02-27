@@ -1,5 +1,8 @@
 # Test the worker subprocess model
 
+# Helper to strip ANSI escape codes for test assertions
+strip_ansi(s) = replace(s, r"\e\[[0-9;]*m" => "")
+
 @testset "Code Evaluation" begin
     @testset "Basic arithmetic" begin
         value_str, output, error_str, elapsed = AgentREPL.capture_eval_on_worker("1 + 1")
@@ -138,7 +141,7 @@ end
 @testset "Result Formatting" begin
     @testset "Success with value" begin
         result = AgentREPL.format_result("1 + 1", "2", "", nothing)
-        @test contains(result, "julia> 1 + 1")  # REPL-style prompt
+        @test contains(strip_ansi(result), "julia> 1 + 1")  # REPL-style prompt
         @test contains(result, "2")  # Result value
     end
 
@@ -150,7 +153,7 @@ end
 
     @testset "Error formatting" begin
         result = AgentREPL.format_result("bad_code", "nothing", "", "UndefVarError: `bad_code` not defined")
-        @test contains(result, "julia> bad_code")  # Code shown with prompt
+        @test contains(strip_ansi(result), "julia> bad_code")  # Code shown with prompt
         @test contains(result, "UndefVarError")
     end
 
