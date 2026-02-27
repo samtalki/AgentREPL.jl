@@ -30,3 +30,4 @@ Unlike a "soft reset" that only clears variables, this is a **hard reset** that:
 - The session is in a bad/corrupted state
 - You want a completely clean slate
 - Something is behaving unexpectedly
+- Code is stuck/hanging (infinite loop, long computation)

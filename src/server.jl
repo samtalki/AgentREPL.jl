@@ -77,7 +77,7 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
     # Create and start the server
     server = mcp_server(
         name = "julia-repl",
-        version = "0.3.0",
+        version = "0.5.0",
         description = "Persistent Julia REPL for AI agents - eliminates TTFX",
         tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool, log_viewer_tool, mode_tool]
     )

@@ -54,12 +54,16 @@ function reset_worker!()
 end
 
 """
-    capture_eval_on_worker(code::String) -> (value_str, output, error_str)
+    capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing) -> (value_str, output, error_str, elapsed)
 
 Evaluate Julia code on the worker process, capturing both return value and printed output.
 Uses Core.eval with expressions to avoid closure serialization issues.
+
+Returns a 4-tuple: (value_str, output, error_str, elapsed_seconds).
+
+If `timeout` is set (in seconds), the worker is killed after the timeout and a TimeoutError is returned.
 """
-function capture_eval_on_worker(code::String)
+function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing)
     worker_id = ensure_worker!()
 
     # Define the evaluation function on the worker if not already defined
@@ -120,7 +124,50 @@ function capture_eval_on_worker(code::String)
         end
     end
 
-    return remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
+    local value_str, output, error_str
+
+    elapsed = @elapsed begin
+        if timeout === nothing
+            # No timeout: blocking remotecall_fetch (original behavior)
+            value_str, output, error_str = remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
+        else
+            # With timeout: race remotecall against a timer
+            result_channel = Channel{Any}(1)
+            future = remotecall(Core.eval, worker_id, Main, eval_expr)
+
+            # Race: eval completion vs timeout
+            @async begin
+                try
+                    result = fetch(future)
+                    put!(result_channel, (:ok, result))
+                catch e
+                    put!(result_channel, (:error, e))
+                end
+            end
+
+            @async begin
+                sleep(timeout)
+                put!(result_channel, (:timeout, nothing))
+            end
+
+            tag, payload = take!(result_channel)
+
+            if tag == :ok
+                value_str, output, error_str = payload
+            elseif tag == :error
+                value_str = "nothing"
+                output = ""
+                error_str = sprint(showerror, payload)
+            else  # :timeout
+                kill_worker!()
+                value_str = "nothing"
+                output = ""
+                error_str = "TimeoutError: evaluation exceeded $(timeout)s timeout. Worker was killed and will respawn on next eval."
+            end
+        end
+    end
+
+    return (value_str, output, error_str, elapsed)
 end
 
 """
@@ -132,14 +179,28 @@ function get_worker_info()
     worker_id = ensure_worker!()
 
     info_expr = quote
-        # Get user-defined symbols
+        # Get user-defined symbols with type and size info
         all_names = names(Main; all=true)
         protected = Set([:Base, :Core, :Main, :ans, :include, :eval, :Pkg])
-        user_vars = Symbol[]
+        user_vars = NamedTuple{(:name, :type, :size), Tuple{Symbol, String, String}}[]
         for name in all_names
             name_str = string(name)
             if !startswith(name_str, "#") && !startswith(name_str, "_") && !(name in protected)
-                push!(user_vars, name)
+                val = try; Core.eval(Main, name); catch; nothing; end
+                type_str = try; string(typeof(val)); catch; "?"; end
+                size_str = try
+                    if applicable(size, val) && !(val isa AbstractString)
+                        s = size(val)
+                        length(s) > 1 ? string(s) : "length=$(length(val))"
+                    elseif applicable(length, val)
+                        "length=$(length(val))"
+                    else
+                        ""
+                    end
+                catch
+                    ""
+                end
+                push!(user_vars, (name=name, type=type_str, size=size_str))
             end
         end
 

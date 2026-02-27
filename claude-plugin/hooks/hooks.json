@@ -1,0 +1,13 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "mcp__plugin_julia_julia-repl__eval",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "Check if the assistant showed the Julia code to the user before calling eval. The code can be displayed as a fenced ```julia block, inline `code`, or clearly described in the message. If the code is visible to the user in any readable form, respond with nothing. Only respond with a warning if eval is called with NO prior mention of the code at all: 'Show Julia code to the user before calling eval so they can review it.'"
+        }
+      ]
+    }
+  ]
+}

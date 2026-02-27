@@ -4,7 +4,7 @@ This plugin provides a persistent Julia REPL for Claude Code, eliminating the "T
 
 ## Prerequisites
 
-- Julia 1.10+ installed and available in PATH
+- Julia 1.10+ installed and available in PATH (verify with `julia --version`)
 - AgentREPL.jl package (this repository)
 
 ## Installation
@@ -27,13 +27,12 @@ claude --plugin-dir /path/to/AgentREPL.jl/claude-plugin
 
 The plugin automatically configures the `julia-repl` MCP server which provides:
 
-- `eval` - Evaluate Julia code with persistent state
+- `eval` - Evaluate Julia code with persistent state, execution timing, optional timeout, and output truncation
 - `reset` - **Hard reset**: kills worker, spawns fresh one
-- `info` - Get session information (including worker ID)
+- `info` - Get session information with typed variables (name, type, size)
 - `pkg` - Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
 - `activate` - Switch project/environment
 - `log_viewer` - Open a terminal showing Julia output in real-time
-- `mode` - Switch between distributed and tmux modes (tmux is deprecated)
 
 ### Commands
 
@@ -41,7 +40,11 @@ The plugin automatically configures the `julia-repl` MCP server which provides:
 - `/julia-info` - Show session information
 - `/julia-pkg <action> [packages]` - Package management
 - `/julia-activate <path>` - Activate a project/environment
-- `/julia-mode <mode>` - Switch execution mode (distributed recommended, tmux deprecated)
+- `/julia-log <mode>` - Control log viewer for real-time output (auto, tmux, file, off)
+
+### Hooks
+
+- **PreToolUse (eval)** - Validates that Julia code is displayed in a readable format before calling the eval tool, ensuring users can review code before execution
 
 ### Skill
 
@@ -79,6 +82,10 @@ On first use, Claude will ask about your environment preference:
 - Type definitions CAN be changed after reset (unlike soft resets)
 - Activated environment persists even across reset
 - First evaluation is slow (TTFX), subsequent ones are fast
+- Execution timing shown on every eval result
+- `timeout` parameter kills hung/infinite code automatically
+- Large outputs auto-truncated to prevent context window overflow
+- `info` shows variable types and sizes (no extra eval calls needed)
 
 ## Visual Output (Log Viewer)
 
@@ -90,17 +97,6 @@ log_viewer(mode="auto")
 ```
 
 This opens a tmux session or terminal with `tail -f ~/.julia/logs/repl.log`.
-
-## Tmux Mode (Deprecated)
-
-**Note:** Tmux bidirectional REPL mode is deprecated due to unfixable marker pollution issues.
-
-Use distributed mode (default) with the log viewer for visual output instead:
-- Set `JULIA_REPL_VIEWER=auto` environment variable, OR
-- Use the `log_viewer` tool at runtime
-
-To force-enable tmux mode (not recommended):
-- Set `JULIA_REPL_ENABLE_TMUX=true` environment variable
 
 ## Package Management
 
