@@ -132,7 +132,7 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
             value_str, output, error_str = remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
         else
             # With timeout: race remotecall against a timer
-            result_channel = Channel{Any}(1)
+            result_channel = Channel{Any}(2)
             future = remotecall(Core.eval, worker_id, Main, eval_expr)
 
             # Race: eval completion vs timeout
@@ -191,7 +191,11 @@ function get_worker_info()
                 size_str = try
                     if applicable(size, val) && !(val isa AbstractString)
                         s = size(val)
-                        length(s) > 1 ? string(s) : "length=$(length(val))"
+                        if !isempty(s)
+                            length(s) > 1 ? string(s) : "length=$(length(val))"
+                        else
+                            ""
+                        end
                     elseif applicable(length, val)
                         "length=$(length(val))"
                     else

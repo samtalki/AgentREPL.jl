@@ -75,7 +75,9 @@ JULIA_REPL_HIGHLIGHT=true JULIA_REPL_OUTPUT_FORMAT=ansi julia --project=. bin/ju
 
 - **`ensure_worker!()`** - Ensures a worker process exists, creating one if needed (`worker.jl`)
 - **`kill_worker!()`** / **`reset_worker!()`** - Worker lifecycle management (`worker.jl`)
-- **`capture_eval_on_worker(code)`** - Evaluates code on the worker with output capture (`worker.jl`)
+- **`capture_eval_on_worker(code; timeout)`** - Evaluates code on the worker with output capture, returns `(value_str, output, error_str, elapsed)` (`worker.jl`)
+- **`truncate_output(text, max_chars)`** - Truncate text keeping head (60%) and tail (40%) (`formatting.jl`)
+- **`format_elapsed(elapsed)`** - Format elapsed time as human-readable string (`formatting.jl`)
 - **`format_result(...)`** - Formats results with syntax highlighting (`formatting.jl`)
 - **`highlight_code(code; format)`** - Apply syntax highlighting to Julia code (`highlighting.jl`)
 - **`is_highlighting_enabled()`** / **`get_output_format()`** - Configuration getters (`highlighting.jl`)
@@ -85,7 +87,7 @@ JULIA_REPL_HIGHLIGHT=true JULIA_REPL_OUTPUT_FORMAT=ansi julia --project=. bin/ju
 
 ### MCP Tools
 
-Seven tools registered via ModelContextProtocol.jl:
+Six tools registered via ModelContextProtocol.jl:
 
 1. **`eval`** - Evaluates Julia code with persistent state on the worker
 2. **`reset`** - **Hard reset**: kills worker, spawns fresh one (enables type redefinition)
@@ -93,7 +95,6 @@ Seven tools registered via ModelContextProtocol.jl:
 4. **`pkg`** - Package management (add, rm, status, update, instantiate, resolve, test, develop, free)
 5. **`activate`** - Switch active project/environment
 6. **`log_viewer`** - Control log viewer for visual REPL output
-7. **`mode`** - Switch between distributed and tmux modes (tmux is deprecated)
 
 ### Key Design Decisions
 

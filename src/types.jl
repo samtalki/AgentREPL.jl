@@ -17,7 +17,8 @@ end
 """
     WORKER::WorkerState
 
-Global state for the worker subprocess. Access via `ensure_worker!()` rather than directly.
+Global state for the worker subprocess. Production code should access via `ensure_worker!()`;
+tests may access directly to verify internal state.
 """
 const WORKER = WorkerState(nothing, nothing)
 

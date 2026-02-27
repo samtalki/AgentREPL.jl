@@ -13,9 +13,9 @@ function truncate_output(text::String, max_chars::Int)
     tail_chars = max_chars - head_chars
     removed = length(text) - head_chars - tail_chars
 
-    return text[1:head_chars] *
+    return first(text, head_chars) *
         "\n\n... [$(removed) characters truncated] ...\n\n" *
-        text[end-tail_chars+1:end]
+        last(text, tail_chars)
 end
 
 """
