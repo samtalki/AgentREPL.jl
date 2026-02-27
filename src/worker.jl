@@ -141,16 +141,17 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
                     result = fetch(future)
                     put!(result_channel, (:ok, result))
                 catch e
-                    put!(result_channel, (:error, e))
+                    try; put!(result_channel, (:error, e)); catch; end
                 end
             end
 
             @async begin
                 sleep(timeout)
-                put!(result_channel, (:timeout, nothing))
+                try; put!(result_channel, (:timeout, nothing)); catch; end
             end
 
             tag, payload = take!(result_channel)
+            close(result_channel)  # Signal the losing task to stop
 
             if tag == :ok
                 value_str, output, error_str = payload
