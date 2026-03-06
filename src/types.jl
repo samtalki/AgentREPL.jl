@@ -17,7 +17,8 @@ end
 """
     WORKER::WorkerState
 
-Global state for the worker subprocess. Access via `ensure_worker!()` rather than directly.
+Global state for the worker subprocess. Production code should access via `ensure_worker!()`;
+tests may access directly to verify internal state.
 """
 const WORKER = WorkerState(nothing, nothing)
 
@@ -118,7 +119,16 @@ Global syntax highlighting configuration. Set via environment variables:
 - `JULIA_REPL_HIGHLIGHT`: "true" or "false" (default: "true")
 - `JULIA_REPL_OUTPUT_FORMAT`: "ansi", "markdown", or "plain" (default: "ansi")
 """
-const HIGHLIGHT_CONFIG = HighlightConfig(
-    lowercase(get(ENV, "JULIA_REPL_HIGHLIGHT", "true")) == "true",
-    _validate_output_format(get(ENV, "JULIA_REPL_OUTPUT_FORMAT", "ansi"))
-)
+const HIGHLIGHT_CONFIG = HighlightConfig(true, :ansi)
+
+"""
+    _init_highlight_config!()
+
+Re-read environment variables into HIGHLIGHT_CONFIG. Called from `__init__()`
+to ensure runtime values are used instead of precompilation-cached defaults.
+"""
+function _init_highlight_config!()
+    HIGHLIGHT_CONFIG.enabled = lowercase(get(ENV, "JULIA_REPL_HIGHLIGHT", "true")) == "true"
+    HIGHLIGHT_CONFIG.format = _validate_output_format(get(ENV, "JULIA_REPL_OUTPUT_FORMAT", "ansi"))
+    nothing
+end

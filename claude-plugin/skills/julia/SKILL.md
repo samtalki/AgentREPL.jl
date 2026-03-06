@@ -1,6 +1,6 @@
 ---
 name: julia-evaluation
-description: This skill should be used when the user asks to "run Julia code", "evaluate Julia", "use Julia", mentions "persistent Julia session", "TTFX", or wants to work with Julia for data analysis, scientific computing, or package development. Provides best practices for using the Julia REPL MCP tools effectively.
+description: This skill should be used when the user asks to "run Julia code", "evaluate Julia", "use Julia", "test Julia package", "add Julia package", "Julia REPL", mentions "persistent Julia session", "TTFX", "JIT compilation", or wants to work with Julia for data analysis, scientific computing, numerical computing, linear algebra, differential equations, machine learning, optimization, or package development. Also activates when user mentions Julia-specific concepts like "multiple dispatch", "type system", "metaprogramming", "macro", "DataFrames", "Plots", "Flux", or any Julia package names. Provides best practices for using the Julia REPL MCP tools effectively.
 version: 0.5.0
 ---
 
@@ -27,21 +27,27 @@ log_viewer(mode="auto")   # Opens a terminal with live output
 
 Or set `JULIA_REPL_VIEWER=auto` environment variable before starting.
 
-### Note on Tmux Mode
-
-Tmux mode is deprecated due to unfixable marker pollution issues. Use distributed mode (default) with `log_viewer` for visual output.
-
 ## Available Tools
 
 | Tool | Purpose |
 |------|---------|
-| `eval` | Evaluate Julia code with persistent state |
+| `eval` | Evaluate Julia code with persistent state, timing, and optional timeout |
 | `reset` | **Hard reset** - kills worker, spawns fresh one (enables type redefinition) |
-| `info` | Get session info (version, project, variables, worker ID) |
+| `info` | Get session info (version, project, typed variables, worker ID) |
 | `pkg` | Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free) |
 | `activate` | Switch active project/environment |
 | `log_viewer` | Open a terminal window showing Julia output in real-time |
-| `mode` | (Deprecated) Switch between distributed and tmux modes |
+
+### Eval Tool Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `code` | string | (required) | Julia code to evaluate |
+| `timeout` | number | none | Max execution time in seconds. Worker is killed on timeout. |
+| `max_output` | integer | 50000 | Max characters before output is truncated (head+tail preserved) |
+| `max_stackframes` | integer | 5 | Max stacktrace frames in errors. Increase for deep macro errors. |
+
+Every eval result includes execution timing (e.g., `[45.2ms]` or `[1.23s]`).
 
 ## Critical: Beautiful Code and Output Display
 
@@ -114,6 +120,7 @@ Use `reset` when:
 - You need to redefine a struct or type
 - Something is in a bad state
 - You want a completely clean slate
+- Code is stuck/hanging (infinite loop, long computation)
 
 After reset, packages need to be reloaded with `using`.
 
@@ -219,22 +226,21 @@ Common issues and solutions:
 | `LoadError` | Package not installed | Use `pkg(action="add", packages="...")` |
 | `cannot redefine` | Type redefinition | Use `reset` for a fresh worker |
 | `StackOverflowError` | Infinite recursion | Fix recursion, may need `reset` |
+| Tool not responding | Julia not installed or worker hung | Check `julia --version` or use `reset` |
+
+## Handling Hung Code
+
+Use the `timeout` parameter when evaluating code that might hang or run too long:
+
+```
+eval(code="while true end", timeout=5)  # kills worker after 5s
+```
+
+If code is already stuck without a timeout, use `/julia-reset` to kill the worker and recover.
 
 ## First-Time Setup
 
-**When first using Julia in a session**, ask the user about their environment preference before running code:
-
-> "Before we start, which Julia environment should I use?
-> 1. **Current directory** - activate Project.toml in this folder (if it exists)
-> 2. **Specific project** - provide a path to a Julia project
-> 3. **Default** - use the global environment
->
-> This determines where packages are installed and what dependencies are available."
-
-Based on their answer:
-- Option 1: `activate(path=".")` then `pkg(action="instantiate")`
-- Option 2: `activate(path="/their/path")` then `pkg(action="instantiate")`
-- Option 3: Proceed without activation (uses default environment)
+When first using Julia in a session, ask the user which environment to use (current directory, a specific project path, or the default global environment), then `activate` and `pkg(action="instantiate")` accordingly.
 
 ## Practical Workflow
 

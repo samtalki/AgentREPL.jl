@@ -225,12 +225,13 @@ function setup_log_viewer!(; mode::Symbol=:auto, log_path::Union{String,Nothing}
 end
 
 """
-    log_interaction(code::String, value_str::String, output::String, error_str::Union{String,Nothing})
+    log_interaction(code, value_str, output, error_str; elapsed=nothing)
 
 Log an interaction to the log file with ANSI syntax highlighting.
 Uses JuliaSyntaxHighlighting for code coloring when highlighting is enabled.
 """
-function log_interaction(code::String, value_str::String, output::String, error_str::Union{String,Nothing})
+function log_interaction(code::String, value_str::String, output::String, error_str::Union{String,Nothing};
+                          elapsed::Union{Float64,Nothing}=nothing)
     LOG_VIEWER.log_io === nothing && return
 
     io = LOG_VIEWER.log_io
@@ -260,6 +261,12 @@ function log_interaction(code::String, value_str::String, output::String, error_
         # Normal color for result
         println(io, value_str)
     end
+
+    # Show timing if available
+    if elapsed !== nothing
+        println(io, ANSI_DIM, format_elapsed(elapsed), ANSI_RESET)
+    end
+
     println(io)
     flush(io)
 end

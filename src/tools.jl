@@ -16,6 +16,7 @@ Features:
 - Packages loaded once stay loaded (no TTFX penalty)
 - Both return value and printed output are captured
 - Errors are caught and reported with backtraces
+- Execution time is shown for every evaluation
 
 Use this for iterative development, testing, and exploration.
 """,
@@ -25,6 +26,24 @@ Use this for iterative development, testing, and exploration.
                 type = "string",
                 description = "Julia code to evaluate. Can be single expressions or multi-line code blocks.",
                 required = true
+            ),
+            ToolParameter(
+                name = "timeout",
+                type = "number",
+                description = "Maximum execution time in seconds. If exceeded, the worker is killed and respawns on next eval. Use for potentially long-running or infinite code.",
+                required = false
+            ),
+            ToolParameter(
+                name = "max_output",
+                type = "integer",
+                description = "Maximum characters for output/value before truncation (default: 50000). Prevents context window overflow from large outputs.",
+                required = false
+            ),
+            ToolParameter(
+                name = "max_stackframes",
+                type = "integer",
+                description = "Maximum stacktrace frames to show in errors (default: 5). Increase for deep macro errors, decrease for simple errors.",
+                required = false
             )
         ],
         handler = params -> begin
@@ -38,15 +57,23 @@ Use this for iterative development, testing, and exploration.
                 return TextContent(text = "Error: 'code' parameter cannot be empty")
             end
 
+            # Extract optional parameters
+            timeout_val = get(params, "timeout", nothing)
+            timeout = timeout_val === nothing ? nothing : Float64(timeout_val)
+            max_output = Int(get(params, "max_output", 50_000))
+            max_stackframes = Int(get(params, "max_stackframes", 5))
+
             # Use appropriate backend based on mode
             if REPL_MODE[] == :tmux
                 value_str, output, error_str = eval_in_tmux(code)
+                elapsed = nothing
             else
-                value_str, output, error_str = capture_eval_on_worker(code)
-                log_interaction(code, value_str, output, error_str)
+                value_str, output, error_str, elapsed = capture_eval_on_worker(code; timeout=timeout)
+                log_interaction(code, value_str, output, error_str; elapsed=elapsed)
             end
 
-            result = format_result(code, value_str, output, error_str)
+            result = format_result(code, value_str, output, error_str;
+                                    elapsed=elapsed, max_output=max_output, max_stackframes=max_stackframes)
             TextContent(text = result)
         end
     )
@@ -130,12 +157,25 @@ Returns:
         handler = _ -> begin
             info = get_worker_info()
 
-            vars_str = isempty(info.variables) ? "(none)" : join(info.variables, ", ")
+            vars_str = if isempty(info.variables)
+                "(none)"
+            else
+                lines = String[]
+                for v in info.variables
+                    entry = "  $(v.name)::$(v.type)"
+                    if !isempty(v.size)
+                        entry *= " $(v.size)"
+                    end
+                    push!(lines, entry)
+                end
+                join(lines, "\n")
+            end
 
             msg = """
 Julia Version: $(info.version)
 Active Project: $(info.project)
-User Variables: $vars_str
+User Variables:
+$vars_str
 Loaded Modules: $(info.modules)
 Worker ID: $(WORKER.worker_id)
 """

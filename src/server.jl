@@ -15,7 +15,6 @@ Start the AgentREPL MCP server using STDIO transport.
 - `pkg`: Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
 - `activate`: Switch active project/environment
 - `log_viewer`: Control the log viewer for visual output
-- `mode`: Switch between distributed and tmux modes (tmux is deprecated)
 
 # Example
 ```julia
@@ -72,14 +71,13 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
     pkg_tool = create_pkg_tool()
     activate_tool = create_activate_tool()
     log_viewer_tool = create_log_viewer_tool()
-    mode_tool = create_mode_tool()
 
     # Create and start the server
     server = mcp_server(
         name = "julia-repl",
-        version = "0.3.0",
+        version = "0.5.0",
         description = "Persistent Julia REPL for AI agents - eliminates TTFX",
-        tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool, log_viewer_tool, mode_tool]
+        tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool, log_viewer_tool]
     )
 
     @info "AgentREPL server starting..." julia_version=VERSION

@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Julia development tools for Claude Code - persistent REPL, package management, modern workflows",
-    "version": "0.3.0"
+    "version": "0.5.0"
   },
   "plugins": [
     {
       "name": "julia",
       "source": "./claude-plugin",
       "description": "Persistent Julia REPL for Claude Code - eliminates TTFX startup penalty, supports modern Julia workflows",
-      "version": "0.3.0",
+      "version": "0.5.0",
       "author": {
         "name": "Samuel Talkington",
         "email": "talkington@pm.me"

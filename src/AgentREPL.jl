@@ -63,4 +63,8 @@ include("deprecated/tmux.jl")
 include("tools.jl")
 include("server.jl")
 
+function __init__()
+    _init_highlight_config!()
+end
+
 end # module
