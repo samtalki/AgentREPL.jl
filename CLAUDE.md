@@ -49,8 +49,6 @@ src/
   logging.jl             # Log viewer functionality
   tools.jl               # MCP tool definitions (8 tools)
   server.jl              # start_server function
-  deprecated/
-    tmux.jl              # Removed (was deprecated tmux REPL)
 ```
 
 ### Syntax Highlighting

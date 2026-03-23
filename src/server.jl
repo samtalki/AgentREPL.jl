@@ -30,7 +30,7 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
         if !isdir(project_dir)
             error("Cannot activate project: directory '$project_dir' not found")
         end
-        WORKER.project_path = project_dir
+        _INITIAL_PROJECT_PATH[] = project_dir
     end
 
     # Check for log viewer environment variables

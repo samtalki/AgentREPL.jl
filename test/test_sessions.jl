@@ -107,6 +107,28 @@
         @test err_b === nothing  # Is in session-b
     end
 
+    @testset "Session inherits initial project path" begin
+        AgentREPL._INITIAL_PROJECT_PATH[] = "/test/initial/project"
+        try
+            session = AgentREPL.create_session!("inherit-test")
+            @test session.project_path == "/test/initial/project"
+            AgentREPL.destroy_session!("inherit-test")
+        finally
+            AgentREPL._INITIAL_PROJECT_PATH[] = nothing
+        end
+    end
+
+    @testset "Explicit project_path overrides initial" begin
+        AgentREPL._INITIAL_PROJECT_PATH[] = "/test/initial/project"
+        try
+            session = AgentREPL.create_session!("override-test"; project_path="/explicit/path")
+            @test session.project_path == "/explicit/path"
+            AgentREPL.destroy_session!("override-test")
+        finally
+            AgentREPL._INITIAL_PROJECT_PATH[] = nothing
+        end
+    end
+
     @testset "Cleanup sessions" begin
         for name in collect(keys(AgentREPL.SESSIONS.sessions))
             try; AgentREPL.destroy_session!(name); catch; end

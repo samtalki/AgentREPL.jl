@@ -635,6 +635,9 @@ Examples:
                 for f in status.tracked_files
                     push!(lines, "  - $f")
                 end
+                if !isempty(status.note)
+                    push!(lines, "Note: $(status.note)")
+                end
                 TextContent(text = join(lines, "\n"))
             end
         end

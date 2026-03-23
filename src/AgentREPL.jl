@@ -65,12 +65,12 @@ include("worker.jl")
 include("revise.jl")
 include("packages.jl")
 include("logging.jl")
-include("deprecated/tmux.jl")
 include("tools.jl")
 include("server.jl")
 
 function __init__()
     _init_highlight_config!()
+    atexit(_cleanup_all_workers!)
 end
 
 end # module

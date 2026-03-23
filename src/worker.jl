@@ -32,8 +32,7 @@ function ensure_worker!(session::SessionState)
                 path = session.project_path
                 remotecall_fetch(Core.eval, session.worker_id, Main, :(Pkg.activate($path)))
             catch e
-                @warn "Failed to activate project on worker" project=session.project_path error=e
-                session.project_path = nothing
+                @warn "Failed to activate project on worker — will retry on next worker spawn" project=session.project_path error=e
             end
         end
 
@@ -98,6 +97,42 @@ function reset_worker!()
 end
 
 """
+    _with_output_capture(body_expr::Expr) -> Expr
+
+Generate a quote block that wraps `body_expr` with stdout/stderr capture.
+The returned expression evaluates to `(body_result, stdout_string, stderr_string)`.
+Used at quote construction time — spliced into remote eval expressions via \$().
+"""
+function _with_output_capture(body_expr::Expr)
+    quote
+        let
+            _woc_old_stdout = stdout
+            _woc_old_stderr = stderr
+            _woc_rd_out, _woc_wr_out = redirect_stdout()
+            _woc_rd_err, _woc_wr_err = redirect_stderr()
+            _woc_body_result = try
+                $body_expr
+            finally
+                redirect_stdout(_woc_old_stdout)
+                redirect_stderr(_woc_old_stderr)
+                close(_woc_wr_out)
+                close(_woc_wr_err)
+            end
+            _woc_stdout = ""
+            _woc_stderr = ""
+            try
+                _woc_stdout = String(read(_woc_rd_out))
+                _woc_stderr = String(read(_woc_rd_err))
+            finally
+                try; close(_woc_rd_out); catch; end
+                try; close(_woc_rd_err); catch; end
+            end
+            (_woc_body_result, _woc_stdout, _woc_stderr)
+        end
+    end
+end
+
+"""
     capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing, session_name::Union{String,Nothing}=nothing) -> (value_str, output, error_str, elapsed)
 
 Evaluate Julia code on the worker process, capturing both return value and printed output.
@@ -113,57 +148,34 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
     worker_id = ensure_worker!(session)
     session.last_used = time()
 
-    # Define the evaluation function on the worker if not already defined
-    # This avoids closure serialization issues by sending code as data
     eval_expr = quote
         let code_str = $code
-            value = nothing
-            err = nothing
-            bt = nothing
-
-            old_stdout = stdout
-            old_stderr = stderr
-
-            rd_out, wr_out = redirect_stdout()
-            rd_err, wr_err = redirect_stderr()
-
-            try
-                value = include_string(Main, code_str, "julia_eval")
-            catch e
-                err = e
-                bt = catch_backtrace()
-            finally
-                redirect_stdout(old_stdout)
-                redirect_stderr(old_stderr)
-                close(wr_out)
-                close(wr_err)
-            end
-
-            stdout_content = ""
-            stderr_content = ""
-            try
-                stdout_content = String(read(rd_out))
-                stderr_content = String(read(rd_err))
-            finally
-                # Wrap each close in try-catch to prevent masking errors
-                try; close(rd_out); catch; end
-                try; close(rd_err); catch; end
-            end
+            (_eval_value, _eval_err, _eval_bt), stdout_content, stderr_content = $(_with_output_capture(quote
+                _eval_value = nothing
+                _eval_err = nothing
+                _eval_bt = nothing
+                try
+                    _eval_value = include_string(Main, code_str, "julia_eval")
+                catch e
+                    _eval_err = e
+                    _eval_bt = catch_backtrace()
+                end
+                (_eval_value, _eval_err, _eval_bt)
+            end))
 
             combined_output = stdout_content
             if !isempty(stderr_content)
                 combined_output *= "\n[stderr]\n" * stderr_content
             end
 
-            error_str = err === nothing ? nothing : sprint(showerror, err, bt)
+            error_str = _eval_err === nothing ? nothing : sprint(showerror, _eval_err, _eval_bt)
             value_str = try
-                repr(value)
+                repr(_eval_value)
             catch repr_err
                 try
-                    string(value)
+                    string(_eval_value)
                 catch str_err
-                    # Final fallback for types that can't be stringified (e.g., JSON3.Object)
-                    "<$(typeof(value))>"
+                    "<$(typeof(_eval_value))>"
                 end
             end
 
@@ -178,11 +190,15 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
             # No timeout: blocking remotecall_fetch (original behavior)
             value_str, output, error_str = remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
         else
-            # With timeout: race remotecall against a timer
-            result_channel = Channel{Any}(2)
+            # With timeout: race remotecall against a cancellable Timer
+            result_channel = Channel{Any}(1)
             future = remotecall(Core.eval, worker_id, Main, eval_expr)
 
-            # Race: eval completion vs timeout
+            # Timer fires after timeout; close() cancels if eval wins first
+            timer = Timer(timeout) do _
+                try; put!(result_channel, (:timeout, nothing)); catch; end
+            end
+
             @async begin
                 try
                     result = fetch(future)
@@ -192,13 +208,9 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
                 end
             end
 
-            @async begin
-                sleep(timeout)
-                try; put!(result_channel, (:timeout, nothing)); catch; end
-            end
-
             tag, payload = take!(result_channel)
-            close(result_channel)  # Signal the losing task to stop
+            close(timer)
+            close(result_channel)
 
             if tag == :ok
                 value_str, output, error_str = payload

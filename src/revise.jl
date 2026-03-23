@@ -99,7 +99,7 @@ Returns (available, tracked_files, watched_packages).
 """
 function get_revise_status(session::SessionState)
     if !is_revise_available(session)
-        return (available = false, tracked_files = String[], watched_packages = String[])
+        return (available = false, tracked_files = String[], watched_packages = String[], note = "")
     end
 
     try
@@ -112,13 +112,13 @@ function get_revise_status(session::SessionState)
                     end
                 end
                 tracked_pkgs = String[string(p.name) for p in keys(Revise.pkgdatas)]
-                (available = true, tracked_files = watched, watched_packages = tracked_pkgs)
+                (available = true, tracked_files = watched, watched_packages = tracked_pkgs, note = "")
             catch e
-                (available = true, tracked_files = String[], watched_packages = String[])
+                (available = true, tracked_files = String[], watched_packages = String[], note = "Revise API error: $(sprint(showerror, e))")
             end
         end)
         return result
     catch e
-        return (available = false, tracked_files = String[], watched_packages = String[])
+        return (available = false, tracked_files = String[], watched_packages = String[], note = "")
     end
 end

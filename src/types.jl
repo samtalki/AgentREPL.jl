@@ -67,6 +67,14 @@ Production code should use session-aware functions; tests may access directly.
 const WORKER = WorkerState(nothing, nothing)
 
 """
+    _INITIAL_PROJECT_PATH::Ref{Union{String,Nothing}}
+
+Stores the initial project path so new sessions can inherit it.
+Set by start_server(project_dir=...), which reads JULIA_REPL_PROJECT upstream.
+"""
+const _INITIAL_PROJECT_PATH = Ref{Union{String,Nothing}}(nothing)
+
+"""
     LogViewerState
 
 State for the optional log viewer feature that displays REPL output in a separate terminal.

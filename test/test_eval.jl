@@ -276,6 +276,35 @@ end
     end
 end
 
+@testset "Project Path Persistence" begin
+    @testset "Project path survives failed reactivation" begin
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        session.project_path = "/nonexistent/project/path"
+        AgentREPL.reset_worker!(session)
+        @test session.project_path == "/nonexistent/project/path"
+        # Clean up: restore to nil so subsequent tests aren't affected
+        session.project_path = nothing
+    end
+end
+
+@testset "Worker Cleanup" begin
+    @testset "Cleanup function kills workers" begin
+        AgentREPL.create_session!("cleanup-test")
+        AgentREPL.capture_eval_on_worker("1+1"; session_name="cleanup-test")
+        session = AgentREPL.SESSIONS.sessions["cleanup-test"]
+        worker_id = session.worker_id
+        @test worker_id !== nothing
+        @test worker_id in Distributed.workers()
+
+        AgentREPL._cleanup_all_workers!()
+
+        @test !(worker_id in Distributed.workers())
+        # Clean up session registry
+        try; AgentREPL.destroy_session!("cleanup-test"); catch; end
+    end
+end
+
 @testset "Package Actions" begin
     @testset "Status action works" begin
         result = AgentREPL.run_pkg_action_on_worker("status", String[])

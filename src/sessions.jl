@@ -38,8 +38,17 @@ function create_session!(name::String; project_path::Union{String,Nothing}=nothi
         return session
     end
 
+    # Inherit initial project path from start_server() if no explicit path given
+    effective_path = if project_path !== nothing
+        project_path
+    elseif _INITIAL_PROJECT_PATH[] !== nothing
+        _INITIAL_PROJECT_PATH[]
+    else
+        nothing
+    end
+
     now = time()
-    session = SessionState(name, nothing, project_path, false, now, now)
+    session = SessionState(name, nothing, effective_path, false, now, now)
     SESSIONS.sessions[name] = session
     SESSIONS.current = name
     sync_worker_global!(session)
@@ -141,4 +150,24 @@ function resolve_session(session_name::Union{String,Nothing}=nothing)
         return get_session(session_name)
     end
     return get_current_session!()
+end
+
+"""
+    _cleanup_all_workers!()
+
+Kill all worker processes across all sessions. Called via atexit() hook
+to prevent orphan Julia processes when the MCP server exits.
+"""
+function _cleanup_all_workers!()
+    # Batch rmprocs so total wait is bounded at 5s regardless of session count
+    ids = Int[s.worker_id for (_, s) in SESSIONS.sessions
+              if s.worker_id !== nothing && s.worker_id in workers()]
+    try
+        isempty(ids) || rmprocs(ids; waitfor=5.0)
+    catch
+    end
+    try
+        close_log_viewer!()
+    catch
+    end
 end

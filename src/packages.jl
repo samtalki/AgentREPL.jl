@@ -55,68 +55,48 @@ function run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; sess
 
     pkg_expr = quote
         let act = $action, pkgs = $pkg_list
-            old_stdout = stdout
-            old_stderr = stderr
-            rd_out, wr_out = redirect_stdout()
-            rd_err, wr_err = redirect_stderr()
-
-            err = nothing
-            try
-                if act == "add"
-                    Pkg.add(pkgs)
-                elseif act == "rm"
-                    Pkg.rm(pkgs)
-                elseif act == "status"
-                    Pkg.status()
-                elseif act == "update"
-                    if isempty(pkgs)
-                        Pkg.update()
-                    else
-                        Pkg.update(pkgs)
-                    end
-                elseif act == "instantiate"
-                    Pkg.instantiate()
-                elseif act == "resolve"
-                    Pkg.resolve()
-                elseif act == "test"
-                    if isempty(pkgs)
-                        Pkg.test()
-                    else
-                        Pkg.test(pkgs)
-                    end
-                elseif act == "develop"
-                    # develop can take paths or package names
-                    for pkg in pkgs
-                        if startswith(pkg, "/") || startswith(pkg, ".") || startswith(pkg, "~")
-                            Pkg.develop(path=expanduser(pkg))
+            _pkg_err, stdout_content, stderr_content = $(_with_output_capture(quote
+                _pkg_err = nothing
+                try
+                    if act == "add"
+                        Pkg.add(pkgs)
+                    elseif act == "rm"
+                        Pkg.rm(pkgs)
+                    elseif act == "status"
+                        Pkg.status()
+                    elseif act == "update"
+                        if isempty(pkgs)
+                            Pkg.update()
                         else
-                            Pkg.develop(pkg)
+                            Pkg.update(pkgs)
                         end
+                    elseif act == "instantiate"
+                        Pkg.instantiate()
+                    elseif act == "resolve"
+                        Pkg.resolve()
+                    elseif act == "test"
+                        if isempty(pkgs)
+                            Pkg.test()
+                        else
+                            Pkg.test(pkgs)
+                        end
+                    elseif act == "develop"
+                        for pkg in pkgs
+                            if startswith(pkg, "/") || startswith(pkg, ".") || startswith(pkg, "~")
+                                Pkg.develop(path=expanduser(pkg))
+                            else
+                                Pkg.develop(pkg)
+                            end
+                        end
+                    elseif act == "free"
+                        Pkg.free(pkgs)
                     end
-                elseif act == "free"
-                    Pkg.free(pkgs)
+                catch e
+                    _pkg_err = sprint(showerror, e, catch_backtrace())
                 end
-            catch e
-                err = sprint(showerror, e, catch_backtrace())
-            finally
-                redirect_stdout(old_stdout)
-                redirect_stderr(old_stderr)
-                close(wr_out)
-                close(wr_err)
-            end
-
-            stdout_content = ""
-            stderr_content = ""
-            try
-                stdout_content = String(read(rd_out))
-                stderr_content = String(read(rd_err))
-            finally
-                # Wrap each close in try-catch to prevent masking errors
-                try; close(rd_out); catch; end
-                try; close(rd_err); catch; end
-            end
-
-            (error = err, stdout = stdout_content, stderr = stderr_content)
+                _pkg_err
+            end))
+            (error = _pkg_err, stdout = stdout_content, stderr = stderr_content)
         end
     end
 

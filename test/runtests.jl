@@ -1,5 +1,6 @@
 using Test
 using AgentREPL
+using Distributed
 
 @testset "AgentREPL.jl" begin
     include("test_highlighting.jl")
