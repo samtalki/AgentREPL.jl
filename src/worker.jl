@@ -1,60 +1,104 @@
 # worker.jl - Distributed worker lifecycle management
 
 """
-    ensure_worker!() -> Int
+    ensure_worker!(session::SessionState) -> Int
 
-Ensure a worker process exists, creating one if needed. Returns the worker ID.
+Ensure a worker process exists for the given session, creating one if needed.
+Returns the worker ID. Also attempts to load Revise.jl on the worker.
 """
-function ensure_worker!()
-    if WORKER.worker_id === nothing || !(WORKER.worker_id in workers())
+function ensure_worker!(session::SessionState)
+    if session.worker_id === nothing || !(session.worker_id in workers())
         # Get the current project directory so worker inherits the environment
         project_dir = dirname(Pkg.project().path)
 
         # Spawn a new worker with the same project environment
         new_workers = addprocs(1; exeflags=`--project=$project_dir`)
-        WORKER.worker_id = first(new_workers)
+        session.worker_id = first(new_workers)
 
         # Load Pkg on the worker using Core.eval to avoid closure serialization issues
-        remotecall_fetch(Core.eval, WORKER.worker_id, Main, :(using Pkg))
+        remotecall_fetch(Core.eval, session.worker_id, Main, :(using Pkg))
+
+        # Try to load Revise.jl for hot-reloading support
+        try
+            remotecall_fetch(Core.eval, session.worker_id, Main, :(using Revise))
+            session.revise_loaded = true
+        catch
+            session.revise_loaded = false
+        end
 
         # Activate project if one was set
-        if WORKER.project_path !== nothing
+        if session.project_path !== nothing
             try
-                path = WORKER.project_path
-                remotecall_fetch(Core.eval, WORKER.worker_id, Main, :(Pkg.activate($path)))
+                path = session.project_path
+                remotecall_fetch(Core.eval, session.worker_id, Main, :(Pkg.activate($path)))
             catch e
-                @warn "Failed to activate project on worker" project=WORKER.project_path error=e
-                WORKER.project_path = nothing  # Clear invalid path to prevent repeated failures
+                @warn "Failed to activate project on worker" project=session.project_path error=e
+                session.project_path = nothing
             end
         end
+
+        session.last_used = time()
+        sync_worker_global!(session)
     end
-    return WORKER.worker_id
+    return session.worker_id
+end
+
+"""
+    ensure_worker!() -> Int
+
+Ensure a worker process exists for the current session. Returns the worker ID.
+"""
+function ensure_worker!()
+    session = get_current_session!()
+    return ensure_worker!(session)
+end
+
+"""
+    kill_worker!(session::SessionState)
+
+Kill the worker process for the given session.
+"""
+function kill_worker!(session::SessionState)
+    if session.worker_id !== nothing && session.worker_id in workers()
+        rmprocs(session.worker_id)
+    end
+    session.worker_id = nothing
+    session.revise_loaded = false
+    sync_worker_global!(session)
 end
 
 """
     kill_worker!()
 
-Kill the current worker process if one exists.
+Kill the current session's worker process.
 """
 function kill_worker!()
-    if WORKER.worker_id !== nothing && WORKER.worker_id in workers()
-        rmprocs(WORKER.worker_id)
-    end
-    WORKER.worker_id = nothing
+    session = get_current_session!()
+    kill_worker!(session)
 end
 
 """
-    reset_worker!()
+    reset_worker!(session::SessionState) -> Int
 
-Kill the current worker and spawn a fresh one. Returns the new worker ID.
+Kill the session's worker and spawn a fresh one. Returns the new worker ID.
+"""
+function reset_worker!(session::SessionState)
+    kill_worker!(session)
+    return ensure_worker!(session)
+end
+
+"""
+    reset_worker!() -> Int
+
+Kill the current session's worker and spawn a fresh one. Returns the new worker ID.
 """
 function reset_worker!()
-    kill_worker!()
-    return ensure_worker!()
+    session = get_current_session!()
+    return reset_worker!(session)
 end
 
 """
-    capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing) -> (value_str, output, error_str, elapsed)
+    capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing, session_name::Union{String,Nothing}=nothing) -> (value_str, output, error_str, elapsed)
 
 Evaluate Julia code on the worker process, capturing both return value and printed output.
 Uses Core.eval with expressions to avoid closure serialization issues.
@@ -62,9 +106,12 @@ Uses Core.eval with expressions to avoid closure serialization issues.
 Returns a 4-tuple: (value_str, output, error_str, elapsed_seconds).
 
 If `timeout` is set (in seconds), the worker is killed after the timeout and a TimeoutError is returned.
+If `session_name` is given, evaluates on that session's worker; otherwise uses the current session.
 """
-function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing)
-    worker_id = ensure_worker!()
+function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing, session_name::Union{String,Nothing}=nothing)
+    session = resolve_session(session_name)
+    worker_id = ensure_worker!(session)
+    session.last_used = time()
 
     # Define the evaluation function on the worker if not already defined
     # This avoids closure serialization issues by sending code as data
@@ -160,7 +207,7 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
                 output = ""
                 error_str = sprint(showerror, payload)
             else  # :timeout
-                kill_worker!()
+                kill_worker!(session)
                 value_str = "nothing"
                 output = ""
                 error_str = "TimeoutError: evaluation exceeded $(timeout)s timeout. Worker was killed and will respawn on next eval."
@@ -172,17 +219,17 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
 end
 
 """
-    get_worker_info() -> NamedTuple
+    get_worker_info(session::SessionState) -> NamedTuple
 
-Get information about the current worker session.
+Get information about the given session's worker.
 """
-function get_worker_info()
-    worker_id = ensure_worker!()
+function get_worker_info(session::SessionState)
+    worker_id = ensure_worker!(session)
 
     info_expr = quote
         # Get user-defined symbols with type and size info
         all_names = names(Main; all=true)
-        protected = Set([:Base, :Core, :Main, :ans, :include, :eval, :Pkg])
+        protected = Set([:Base, :Core, :Main, :ans, :include, :eval, :Pkg, :Revise])
         user_vars = NamedTuple{(:name, :type, :size), Tuple{Symbol, String, String}}[]
         for name in all_names
             name_str = string(name)
@@ -232,4 +279,14 @@ function get_worker_info()
     end
 
     return remotecall_fetch(Core.eval, worker_id, Main, info_expr)
+end
+
+"""
+    get_worker_info() -> NamedTuple
+
+Get information about the current session's worker.
+"""
+function get_worker_info()
+    session = get_current_session!()
+    return get_worker_info(session)
 end

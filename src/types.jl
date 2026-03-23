@@ -1,9 +1,53 @@
 # types.jl - State structs and global constants
 
 """
+    SessionState
+
+State for a named Julia REPL session. Each session has its own worker process,
+project environment, and Revise.jl tracking state.
+
+# Fields
+- `name::String`: Session name (e.g., "default", "analysis", "testing")
+- `worker_id::Union{Int, Nothing}`: Distributed.jl worker process ID
+- `project_path::Union{String, Nothing}`: Active project/environment path (persists across resets)
+- `revise_loaded::Bool`: Whether Revise.jl was successfully loaded on the worker
+- `created_at::Float64`: Session creation time (from `time()`)
+- `last_used::Float64`: Last time this session was used (from `time()`)
+"""
+mutable struct SessionState
+    name::String
+    worker_id::Union{Int, Nothing}
+    project_path::Union{String, Nothing}
+    revise_loaded::Bool
+    created_at::Float64
+    last_used::Float64
+end
+
+"""
+    SessionRegistry
+
+Registry of all active Julia REPL sessions.
+
+# Fields
+- `sessions::Dict{String, SessionState}`: Map of session name to state
+- `current::Union{String, Nothing}`: Name of the currently active session
+"""
+mutable struct SessionRegistry
+    sessions::Dict{String, SessionState}
+    current::Union{String, Nothing}
+end
+
+"""
+    SESSIONS::SessionRegistry
+
+Global session registry. All session operations go through this registry.
+"""
+const SESSIONS = SessionRegistry(Dict{String,SessionState}(), nothing)
+
+"""
     WorkerState
 
-Mutable state container for the worker subprocess.
+Mutable state container for backward compatibility. Synchronized with the current session.
 
 # Fields
 - `worker_id::Union{Int, Nothing}`: The Distributed.jl worker process ID, or `nothing` if no worker exists
@@ -17,8 +61,8 @@ end
 """
     WORKER::WorkerState
 
-Global state for the worker subprocess. Production code should access via `ensure_worker!()`;
-tests may access directly to verify internal state.
+Global state for backward compatibility. Kept synchronized with the current session.
+Production code should use session-aware functions; tests may access directly.
 """
 const WORKER = WorkerState(nothing, nothing)
 
@@ -46,42 +90,6 @@ end
 Global state for the log viewer. Configure via `setup_log_viewer!()`.
 """
 const LOG_VIEWER = LogViewerState(nothing, nothing, nothing, :none)
-
-"""
-    TmuxREPLState
-
-State for the tmux-based bidirectional REPL mode (alternative to distributed worker model).
-
-# Fields
-- `session_name::String`: Name of the tmux session (default: `"julia-repl"`)
-- `active::Bool`: Whether the tmux session is currently running
-- `project_path::Union{String, Nothing}`: Path to the active Julia project
-- `terminal_opened::Bool`: Whether a terminal window has been opened for this session
-"""
-mutable struct TmuxREPLState
-    session_name::String
-    active::Bool
-    project_path::Union{String, Nothing}
-    terminal_opened::Bool
-end
-
-"""
-    TMUX_REPL::TmuxREPLState
-
-Global state for tmux-based REPL mode. Only used when `REPL_MODE[] == :tmux`.
-"""
-const TMUX_REPL = TmuxREPLState("julia-repl", false, nothing, false)
-
-"""
-    REPL_MODE::Ref{Symbol}
-
-Global REPL execution mode. Possible values:
-- `:distributed` (default): Uses Distributed.jl worker subprocess
-- `:tmux`: Uses tmux session for bidirectional REPL with visible terminal (DEPRECATED)
-
-Set via `JULIA_REPL_MODE` environment variable before starting the server.
-"""
-const REPL_MODE = Ref{Symbol}(:distributed)
 
 """
     HighlightConfig

@@ -3,17 +3,19 @@
 
 A persistent Julia REPL for AI agents via MCP (Model Context Protocol).
 
-AgentREPL solves Julia's "Time to First X" (TTFX) problem by maintaining a persistent
-worker subprocess. Instead of spawning fresh Julia processes for each command (1-2s startup),
+AgentREPL solves Julia's "Time to First X" (TTFX) problem by maintaining persistent
+worker subprocesses. Instead of spawning fresh Julia processes for each command (1-2s startup),
 the REPL stays alive and you only pay the startup cost once.
 
 # Architecture
 
 AgentREPL uses a worker subprocess model via Distributed.jl:
 - The MCP server runs in the main process (STDIO transport)
-- Code evaluation happens in a spawned worker process
-- `reset` kills the worker and spawns a fresh one (enables type redefinition)
-- `activate` switches the worker's project/environment
+- Code evaluation happens in spawned worker processes (one per session)
+- Multiple named sessions can run concurrently with isolated state
+- `reset` kills a session's worker and spawns a fresh one (enables type redefinition)
+- `activate` switches a session's project/environment
+- Revise.jl is auto-loaded on workers for hot-reloading support
 
 # Quick Start
 
@@ -35,12 +37,14 @@ claude mcp add julia-repl -- julia --project=/path/to/AgentREPL.jl /path/to/Agen
 - `pkg` - Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
 - `activate` - Switch active project/environment
 - `log_viewer` - Control log viewer for visual output
-- `mode` - Switch between distributed and tmux modes (tmux is deprecated)
+- `session` - Manage multiple named sessions (create, switch, list, destroy)
+- `revise` - Hot-reload code changes via Revise.jl (revise, track, includet, status)
 
 # See Also
 
 - [ModelContextProtocol.jl](https://github.com/JuliaSMLM/ModelContextProtocol.jl) - MCP framework
 - [Modern Julia Workflows](https://modernjuliaworkflows.org/) - Best practices guide
+- [Revise.jl](https://github.com/timholy/Revise.jl) - Hot-reloading for Julia
 """
 module AgentREPL
 
@@ -56,7 +60,9 @@ export start_server
 include("types.jl")
 include("highlighting.jl")
 include("formatting.jl")
+include("sessions.jl")
 include("worker.jl")
+include("revise.jl")
 include("packages.jl")
 include("logging.jl")
 include("deprecated/tmux.jl")

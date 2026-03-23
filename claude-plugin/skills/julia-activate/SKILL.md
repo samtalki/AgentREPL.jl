@@ -7,7 +7,7 @@ allowed-tools:
   - mcp__plugin_julia_julia-repl__pkg
 ---
 
-# Julia Activate Command
+# Julia Activate
 
 Activate a Julia project or environment for the current session.
 
@@ -29,9 +29,9 @@ Activate a Julia project or environment for the current session.
 ## Examples
 
 ```
-/julia-activate .
-/julia-activate /path/to/MyProject
-/julia-activate @v1.10
+/julia:julia-activate .
+/julia:julia-activate /path/to/MyProject
+/julia:julia-activate @v1.10
 ```
 
 ## Notes

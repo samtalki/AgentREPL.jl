@@ -1,7 +1,7 @@
 # packages.jl - Package management and project activation
 
 """
-    activate_project_on_worker!(path::String)
+    activate_project_on_worker!(path::String; session_name::Union{String,Nothing}=nothing)
 
 Activate a Julia project/environment on the worker.
 
@@ -10,8 +10,9 @@ Supports:
 - Current directory: "." or "@."
 - Shared environments: "@v1.12", "@myenv" (expands to ~/.julia/environments/...)
 """
-function activate_project_on_worker!(path::String)
-    worker_id = ensure_worker!()
+function activate_project_on_worker!(path::String; session_name::Union{String,Nothing}=nothing)
+    session = resolve_session(session_name)
+    worker_id = ensure_worker!(session)
 
     # Handle shared environment syntax (@v1.12, @myenv, etc.)
     # The @ prefix syntax only works in Pkg REPL mode, not programmatically
@@ -36,19 +37,21 @@ function activate_project_on_worker!(path::String)
     result = remotecall_fetch(Core.eval, worker_id, Main, activate_expr)
 
     if result.success
-        WORKER.project_path = result.project
+        session.project_path = result.project
+        sync_worker_global!(session)
     end
 
     return result
 end
 
 """
-    run_pkg_action_on_worker(action::String, pkg_list::Vector{String})
+    run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; session_name::Union{String,Nothing}=nothing)
 
 Run a Pkg action on the worker process.
 """
-function run_pkg_action_on_worker(action::String, pkg_list::Vector{String})
-    worker_id = ensure_worker!()
+function run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; session_name::Union{String,Nothing}=nothing)
+    session = resolve_session(session_name)
+    worker_id = ensure_worker!(session)
 
     pkg_expr = quote
         let act = $action, pkgs = $pkg_list

@@ -1,12 +1,12 @@
 {
   "name": "julia",
-  "version": "0.5.0",
-  "description": "Persistent Julia REPL for Claude Code - eliminates TTFX startup penalty with a worker subprocess model",
+  "version": "0.6.0",
+  "description": "Persistent Julia REPL for Claude Code — multi-session with Revise.jl hot-reloading, eliminates TTFX startup penalty",
   "repository": "https://github.com/samtalki/AgentREPL.jl",
   "homepage": "https://github.com/samtalki/AgentREPL.jl",
   "author": {
     "name": "samtalki"
   },
   "license": "Apache-2.0",
-  "keywords": ["julia", "repl", "mcp", "scientific-computing", "data-analysis"]
+  "keywords": ["julia", "repl", "mcp", "scientific-computing", "data-analysis", "revise", "multi-session"]
 }

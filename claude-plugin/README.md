@@ -1,6 +1,6 @@
 # Julia Plugin for Claude Code
 
-This plugin provides a persistent Julia REPL for Claude Code, eliminating the "Time to First X" (TTFX) startup penalty that normally occurs with each Julia invocation.
+This plugin provides a persistent Julia REPL for Claude Code with multi-session support and Revise.jl hot-reloading, eliminating the "Time to First X" (TTFX) startup penalty.
 
 ## Prerequisites
 
@@ -23,46 +23,60 @@ claude --plugin-dir /path/to/AgentREPL.jl/claude-plugin
 
 ## What's Included
 
-### MCP Server
+### MCP Server (8 Tools)
 
 The plugin automatically configures the `julia-repl` MCP server which provides:
 
 - `eval` - Evaluate Julia code with persistent state, execution timing, optional timeout, and output truncation
-- `reset` - **Hard reset**: kills worker, spawns fresh one
-- `info` - Get session information with typed variables (name, type, size)
+- `reset` - **Hard reset**: kills worker, spawns fresh one (enables type redefinition)
+- `info` - Get session information with typed variables, Revise.jl status
 - `pkg` - Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
 - `activate` - Switch project/environment
 - `log_viewer` - Open a terminal showing Julia output in real-time
+- `session` - **Manage multiple named sessions** (create, switch, list, destroy)
+- `revise` - **Hot-reload code changes** via Revise.jl (revise, track, includet, status)
 
-### Commands
+All tools accept an optional `session` parameter to target a specific session.
 
-- `/julia-reset` - Kill and respawn the Julia worker (true reset)
-- `/julia-info` - Show session information
-- `/julia-pkg <action> [packages]` - Package management
-- `/julia-activate <path>` - Activate a project/environment
-- `/julia-log <mode>` - Control log viewer for real-time output (auto, tmux, file, off)
+### Skills
+
+**Core skills (auto-triggering):**
+- `julia-evaluation` - Comprehensive best practices for using the Julia REPL tools
+- `julia-language` - Deep Julia language expertise (types, dispatch, metaprogramming, performance)
+
+**User-invoked skills (slash commands):**
+- `/julia:julia-reset` - Kill and respawn the Julia worker
+- `/julia:julia-info` - Show session information
+- `/julia:julia-pkg <action> [packages]` - Package management
+- `/julia:julia-activate <path>` - Activate a project/environment
+- `/julia:julia-log <mode>` - Control log viewer for real-time output
+- `/julia:julia-session <action> [name]` - Manage multiple sessions
+- `/julia:julia-revise [action] [path]` - Hot-reload code changes
+- `/julia:julia-develop [path]` - Set up a development workflow
 
 ### Hooks
 
-- **PreToolUse (eval)** - Validates that Julia code is displayed in a readable format before calling the eval tool, ensuring users can review code before execution
-
-### Skill
-
-The `julia-evaluation` skill provides best practices guidance for:
-- Showing code before evaluation (for readable permission prompts)
-- Understanding TTFX behavior
-- Working with session persistence
-- Environment management
-- Testing and development workflows
-- When to use hard reset vs continuing
+- **PreToolUse (eval)** - Validates that Julia code is displayed in a readable format before calling eval
+- **PostToolUse (Write/Edit)** - Automatically calls `revise` after editing `.jl` files to hot-reload changes into the active Julia session
 
 ## Architecture
 
-AgentREPL uses a **worker subprocess model**:
+AgentREPL uses a **multi-session worker subprocess model**:
 - The MCP server runs in the main Julia process
-- Code evaluation happens in a spawned worker (via Distributed.jl)
-- `reset` kills the worker and spawns a fresh one
+- Each session has its own worker process (via Distributed.jl)
+- Workers are isolated: separate state, packages, project environments
+- Revise.jl is auto-loaded on each worker for hot-reloading
+- `reset` kills a session's worker and spawns a fresh one
 - This enables true reset including type redefinitions
+
+## Key Design Principle: Maximize Session Lifespan
+
+The plugin is designed to **minimize REPL restarts**:
+
+1. **Revise.jl** auto-loads on every worker — edit `.jl` files and hot-reload without losing state
+2. **Multiple sessions** — isolate risky work without affecting your main session
+3. **PostToolUse hook** — automatically hot-reloads after editing Julia files
+4. **Reset is a last resort** — only needed for struct layout changes (Julia < 1.12) or corrupted state
 
 ## Usage
 
@@ -75,32 +89,27 @@ On first use, Claude will ask about your environment preference:
 2. Specific project path
 3. Default/global environment
 
-## Session Behavior
-
-- Variables, functions, and packages persist across evaluations
-- `reset` provides a true hard reset (kills worker process)
-- Type definitions CAN be changed after reset (unlike soft resets)
-- Activated environment persists even across reset
-- First evaluation is slow (TTFX), subsequent ones are fast
-- Execution timing shown on every eval result
-- `timeout` parameter kills hung/infinite code automatically
-- Large outputs auto-truncated to prevent context window overflow
-- `info` shows variable types and sizes (no extra eval calls needed)
-
-## Visual Output (Log Viewer)
-
-To see Julia output in real-time, use the log viewer:
+## Multi-Session Workflow
 
 ```
-# Open a terminal showing output as it happens
-log_viewer(mode="auto")
+/julia:julia-session create analysis    # Create a session for analysis
+/julia:julia-session create testing     # Create another for testing
+/julia:julia-session switch analysis    # Switch between them
+/julia:julia-session list               # See all sessions
 ```
 
-This opens a tmux session or terminal with `tail -f ~/.julia/logs/repl.log`.
+## Development Workflow
+
+```
+/julia:julia-develop .                  # Activate, instantiate, load package, set up Revise
+
+# Edit source files...
+
+/julia:julia-revise                     # Hot-reload changes (or automatic via hook)
+/julia:julia-pkg test                   # Run tests
+```
 
 ## Package Management
-
-The `pkg` tool supports these actions:
 
 | Action | Description | Packages Required |
 |--------|-------------|-------------------|
@@ -113,20 +122,3 @@ The `pkg` tool supports these actions:
 | `test` | Run package tests | No (optional) |
 | `develop` | Use local package code | Yes (path or name) |
 | `free` | Exit development mode | Yes |
-
-## Development Workflow
-
-For local package development:
-
-```
-# Put package in develop mode
-/julia-pkg develop ./MyLocalPackage
-
-# Make changes to the source code...
-
-# Test your changes
-/julia-pkg test MyLocalPackage
-
-# When done, return to registry version
-/julia-pkg free MyLocalPackage
-```

@@ -6,7 +6,7 @@ allowed-tools:
   - mcp__plugin_julia_julia-repl__log_viewer
 ---
 
-# Julia Log Viewer Command
+# Julia Log Viewer
 
 Control the log viewer that displays Julia output in a separate terminal window.
 
@@ -28,13 +28,6 @@ Control the log viewer that displays Julia output in a separate terminal window.
 1. Parse the user's argument to determine the mode
 2. Call `log_viewer` with the specified mode
 3. Report the result to the user
-
-## Examples
-
-```
-/julia-log auto
-/julia-log off
-```
 
 ## Notes
 

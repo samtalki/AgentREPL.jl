@@ -9,5 +9,16 @@
         }
       ]
     }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "Write|Edit",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "If the file just written or edited ends in .jl (a Julia source file) and a Julia REPL session is active (i.e., you have previously called eval, session, or any julia-repl MCP tool in this conversation), call the revise MCP tool with action='revise' to hot-reload the changes into the active Julia session. This preserves session state and avoids needing a reset. Do NOT call revise for non-.jl files or if no Julia session has been started yet."
+        }
+      ]
+    }
   ]
 }
