@@ -84,14 +84,12 @@ function destroy_session!(name::String)
 
     session = SESSIONS.sessions[name]
 
-    # Kill the worker if it exists
     if session.worker_id !== nothing && session.worker_id in workers()
         rmprocs(session.worker_id)
     end
 
     delete!(SESSIONS.sessions, name)
 
-    # If we destroyed the current session, switch to another or clear
     if SESSIONS.current == name
         if isempty(SESSIONS.sessions)
             SESSIONS.current = nothing

@@ -499,7 +499,7 @@ Examples:
                     msg *= "Revise.jl: $(session.revise_loaded ? "loaded" : "not loaded")"
                     TextContent(text = msg)
                 catch e
-                    TextContent(text = "Error: $(e.msg)")
+                    TextContent(text = "Error: $(sprint(showerror, e))")
                 end
 
             elseif action_lower == "list"
@@ -530,7 +530,7 @@ Examples:
                     end
                     TextContent(text = msg)
                 catch e
-                    TextContent(text = "Error: $(e.msg)")
+                    TextContent(text = "Error: $(sprint(showerror, e))")
                 end
             end
         end

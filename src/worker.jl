@@ -8,17 +8,13 @@ Returns the worker ID. Also attempts to load Revise.jl on the worker.
 """
 function ensure_worker!(session::SessionState)
     if session.worker_id === nothing || !(session.worker_id in workers())
-        # Get the current project directory so worker inherits the environment
         project_dir = dirname(Pkg.project().path)
-
-        # Spawn a new worker with the same project environment
         new_workers = addprocs(1; exeflags=`--project=$project_dir`)
         session.worker_id = first(new_workers)
 
-        # Load Pkg on the worker using Core.eval to avoid closure serialization issues
+        # Core.eval avoids closure serialization issues with remotecall
         remotecall_fetch(Core.eval, session.worker_id, Main, :(using Pkg))
 
-        # Try to load Revise.jl for hot-reloading support
         try
             remotecall_fetch(Core.eval, session.worker_id, Main, :(using Revise))
             session.revise_loaded = true
@@ -26,7 +22,6 @@ function ensure_worker!(session::SessionState)
             session.revise_loaded = false
         end
 
-        # Activate project if one was set
         if session.project_path !== nothing
             try
                 path = session.project_path
