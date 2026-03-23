@@ -1,16 +1,6 @@
 # sessions.jl - Multi-session management
 
 """
-    sync_worker_global!(session::SessionState)
-
-Synchronize the global WORKER state with the given session for backward compatibility.
-"""
-function sync_worker_global!(session::SessionState)
-    WORKER.worker_id = session.worker_id
-    WORKER.project_path = session.project_path
-end
-
-"""
     get_current_session!() -> SessionState
 
 Get the current active session. If no session exists, creates a "default" session.
@@ -19,22 +9,20 @@ function get_current_session!()
     if SESSIONS.current === nothing || !haskey(SESSIONS.sessions, SESSIONS.current)
         return create_session!("default")
     end
-    session = SESSIONS.sessions[SESSIONS.current]
-    session.last_used = time()
-    return session
+    return SESSIONS.sessions[SESSIONS.current]
 end
 
 """
     create_session!(name::String; project_path::Union{String,Nothing}=nothing) -> SessionState
 
-Create a new named session. If a session with this name already exists, returns it.
-The worker is NOT spawned here — it's created lazily on first use via `ensure_worker!`.
+Create a new named session. If a session with this name already exists, returns it
+(and sets it as current). The worker is NOT spawned here — it's created lazily on
+first use via `ensure_worker!`.
 """
 function create_session!(name::String; project_path::Union{String,Nothing}=nothing)
     if haskey(SESSIONS.sessions, name)
         session = SESSIONS.sessions[name]
         SESSIONS.current = name
-        sync_worker_global!(session)
         return session
     end
 
@@ -47,11 +35,9 @@ function create_session!(name::String; project_path::Union{String,Nothing}=nothi
         nothing
     end
 
-    now = time()
-    session = SessionState(name, nothing, effective_path, false, now, now)
+    session = SessionState(name, nothing, effective_path)
     SESSIONS.sessions[name] = session
     SESSIONS.current = name
-    sync_worker_global!(session)
     return session
 end
 
@@ -67,15 +53,16 @@ function switch_session!(name::String)
     session = SESSIONS.sessions[name]
     SESSIONS.current = name
     session.last_used = time()
-    sync_worker_global!(session)
     return session
 end
 
 """
     destroy_session!(name::String)
 
-Destroy a session, killing its worker process. Cannot destroy the current session
-if it's the only one — switch first.
+Destroy a session, killing its worker process. If the destroyed session is the current
+session and other sessions exist, switches to an arbitrary remaining session. If it's the
+only session, current becomes `nothing` and a new "default" session will be auto-created
+on next use.
 """
 function destroy_session!(name::String)
     if !haskey(SESSIONS.sessions, name)
@@ -83,22 +70,14 @@ function destroy_session!(name::String)
     end
 
     session = SESSIONS.sessions[name]
-
-    if session.worker_id !== nothing && session.worker_id in workers()
-        rmprocs(session.worker_id)
-    end
-
+    kill_worker!(session)
     delete!(SESSIONS.sessions, name)
 
     if SESSIONS.current == name
         if isempty(SESSIONS.sessions)
             SESSIONS.current = nothing
-            WORKER.worker_id = nothing
-            WORKER.project_path = nothing
         else
-            new_current = first(keys(SESSIONS.sessions))
-            SESSIONS.current = new_current
-            sync_worker_global!(SESSIONS.sessions[new_current])
+            SESSIONS.current = first(keys(SESSIONS.sessions))
         end
     end
 end
@@ -162,10 +141,12 @@ function _cleanup_all_workers!()
               if s.worker_id !== nothing && s.worker_id in workers()]
     try
         isempty(ids) || rmprocs(ids; waitfor=5.0)
-    catch
+    catch e
+        try; println(stderr, "AgentREPL: failed to clean up workers $ids: ", sprint(showerror, e)); catch; end
     end
     try
         close_log_viewer!()
-    catch
+    catch e
+        try; println(stderr, "AgentREPL: failed to close log viewer: ", sprint(showerror, e)); catch; end
     end
 end

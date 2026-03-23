@@ -6,4 +6,5 @@ using Distributed
     include("test_highlighting.jl")
     include("test_eval.jl")
     include("test_sessions.jl")
+    include("test_revise.jl")
 end

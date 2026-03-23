@@ -18,8 +18,11 @@ function ensure_worker!(session::SessionState)
         try
             remotecall_fetch(Core.eval, session.worker_id, Main, :(using Revise))
             session.revise_loaded = true
-        catch
+        catch e
             session.revise_loaded = false
+            if e isa Distributed.RemoteException || e isa Distributed.ProcessExitedException
+                @warn "Worker may have crashed while loading Revise.jl" session=session.name exception=(e, catch_backtrace())
+            end
         end
 
         if session.project_path !== nothing
@@ -27,24 +30,16 @@ function ensure_worker!(session::SessionState)
                 path = session.project_path
                 remotecall_fetch(Core.eval, session.worker_id, Main, :(Pkg.activate($path)))
             catch e
+                # Intentionally preserve project_path so a transient activation failure
+                # (e.g., missing Manifest.toml) can succeed on next worker spawn after
+                # the user runs pkg(action="instantiate")
                 @warn "Failed to activate project on worker — will retry on next worker spawn" project=session.project_path error=e
             end
         end
 
         session.last_used = time()
-        sync_worker_global!(session)
     end
     return session.worker_id
-end
-
-"""
-    ensure_worker!() -> Int
-
-Ensure a worker process exists for the current session. Returns the worker ID.
-"""
-function ensure_worker!()
-    session = get_current_session!()
-    return ensure_worker!(session)
 end
 
 """
@@ -54,21 +49,14 @@ Kill the worker process for the given session.
 """
 function kill_worker!(session::SessionState)
     if session.worker_id !== nothing && session.worker_id in workers()
-        rmprocs(session.worker_id)
+        try
+            rmprocs(session.worker_id)
+        catch e
+            @warn "Failed to cleanly kill worker" session=session.name worker_id=session.worker_id exception=(e, catch_backtrace())
+        end
     end
     session.worker_id = nothing
     session.revise_loaded = false
-    sync_worker_global!(session)
-end
-
-"""
-    kill_worker!()
-
-Kill the current session's worker process.
-"""
-function kill_worker!()
-    session = get_current_session!()
-    kill_worker!(session)
 end
 
 """
@@ -79,16 +67,6 @@ Kill the session's worker and spawn a fresh one. Returns the new worker ID.
 function reset_worker!(session::SessionState)
     kill_worker!(session)
     return ensure_worker!(session)
-end
-
-"""
-    reset_worker!() -> Int
-
-Kill the current session's worker and spawn a fresh one. Returns the new worker ID.
-"""
-function reset_worker!()
-    session = get_current_session!()
-    return reset_worker!(session)
 end
 
 """
@@ -113,15 +91,10 @@ function _with_output_capture(body_expr::Expr)
                 close(_woc_wr_out)
                 close(_woc_wr_err)
             end
-            _woc_stdout = ""
-            _woc_stderr = ""
-            try
-                _woc_stdout = String(read(_woc_rd_out))
-                _woc_stderr = String(read(_woc_rd_err))
-            finally
-                try; close(_woc_rd_out); catch; end
-                try; close(_woc_rd_err); catch; end
-            end
+            _woc_stdout = try; String(read(_woc_rd_out)); catch; "[output capture failed]"; end
+            _woc_stderr = try; String(read(_woc_rd_err)); catch; "[stderr capture failed]"; end
+            try; close(_woc_rd_out); catch; end
+            try; close(_woc_rd_err); catch; end
             (_woc_body_result, _woc_stdout, _woc_stderr)
         end
     end
@@ -182,14 +155,27 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
 
     elapsed = @elapsed begin
         if timeout === nothing
-            # No timeout: blocking remotecall_fetch (original behavior)
-            value_str, output, error_str = remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
+            # No timeout: blocking remotecall_fetch with crash protection
+            try
+                value_str, output, error_str = remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
+            catch e
+                if e isa Distributed.ProcessExitedException
+                    session.worker_id = nothing
+                    session.revise_loaded = false
+                    value_str = "nothing"
+                    output = ""
+                    error_str = "Worker process crashed. It will respawn on next eval. Error: $(sprint(showerror, e))"
+                else
+                    rethrow()
+                end
+            end
         else
             # With timeout: race remotecall against a cancellable Timer
             result_channel = Channel{Any}(1)
             future = remotecall(Core.eval, worker_id, Main, eval_expr)
 
-            # Timer fires after timeout; close() cancels if eval wins first
+            # Timer fires after timeout. Race safety comes from the Channel(1) —
+            # only the first put! succeeds. close(timer) is best-effort cleanup.
             timer = Timer(timeout) do _
                 try; put!(result_channel, (:timeout, nothing)); catch; end
             end
@@ -199,7 +185,11 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
                     result = fetch(future)
                     put!(result_channel, (:ok, result))
                 catch e
-                    try; put!(result_channel, (:error, e)); catch; end
+                    try
+                        put!(result_channel, (:error, e))
+                    catch put_err
+                        @warn "Failed to report async eval error (channel may be closed)" exception=(e, catch_backtrace())
+                    end
                 end
             end
 
@@ -286,14 +276,4 @@ function get_worker_info(session::SessionState)
     end
 
     return remotecall_fetch(Core.eval, worker_id, Main, info_expr)
-end
-
-"""
-    get_worker_info() -> NamedTuple
-
-Get information about the current session's worker.
-"""
-function get_worker_info()
-    session = get_current_session!()
-    return get_worker_info(session)
 end

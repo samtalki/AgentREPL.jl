@@ -9,7 +9,7 @@ the REPL stays alive and you only pay the startup cost once.
 
 # Architecture
 
-AgentREPL uses a worker subprocess model via Distributed.jl:
+AgentREPL uses a multi-session worker subprocess model via Distributed.jl:
 - The MCP server runs in the main process (STDIO transport)
 - Code evaluation happens in spawned worker processes (one per session)
 - Multiple named sessions can run concurrently with isolated state

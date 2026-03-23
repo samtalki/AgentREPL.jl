@@ -109,6 +109,9 @@ function get_revise_status(session::SessionState)
         result = remotecall_fetch(Core.eval, session.worker_id, Main, quote
             try
                 watched = String[]
+                # NOTE: Revise.watched_files and Revise.pkgdatas are internal APIs,
+                # not part of Revise's public interface. The try/catch guards against
+                # API changes between Revise versions.
                 for (pkg, files) in Revise.watched_files
                     for f in files
                         push!(watched, string(f))
@@ -122,6 +125,7 @@ function get_revise_status(session::SessionState)
         end)
         return result
     catch e
-        return (available = false, tracked_files = String[], watched_packages = String[], note = "")
+        return (available = false, tracked_files = String[], watched_packages = String[],
+                note = "Failed to query Revise status: $(sprint(showerror, e))")
     end
 end

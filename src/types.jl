@@ -7,7 +7,7 @@ State for a named Julia REPL session. Each session has its own worker process,
 project environment, and Revise.jl tracking state.
 
 # Fields
-- `name::String`: Session name (e.g., "default", "analysis", "testing")
+- `name::String`: Session name (e.g., "default", "analysis", "testing") — must not be empty, must not be mutated after construction
 - `worker_id::Union{Int, Nothing}`: Distributed.jl worker process ID
 - `project_path::Union{String, Nothing}`: Active project/environment path (persists across resets)
 - `revise_loaded::Bool`: Whether Revise.jl was successfully loaded on the worker
@@ -21,6 +21,12 @@ mutable struct SessionState
     revise_loaded::Bool
     created_at::Float64
     last_used::Float64
+
+    function SessionState(name::String, worker_id::Union{Int,Nothing}, project_path::Union{String,Nothing}, revise_loaded::Bool=false)
+        isempty(name) && error("Session name must not be empty")
+        now = time()
+        new(name, worker_id, project_path, revise_loaded, now, now)
+    end
 end
 
 """
@@ -45,28 +51,6 @@ Global session registry. All session operations go through this registry.
 const SESSIONS = SessionRegistry(Dict{String,SessionState}(), nothing)
 
 """
-    WorkerState
-
-Mutable state container for backward compatibility. Synchronized with the current session.
-
-# Fields
-- `worker_id::Union{Int, Nothing}`: The Distributed.jl worker process ID, or `nothing` if no worker exists
-- `project_path::Union{String, Nothing}`: Path to the active Julia project/environment, persists across resets
-"""
-mutable struct WorkerState
-    worker_id::Union{Int, Nothing}
-    project_path::Union{String, Nothing}
-end
-
-"""
-    WORKER::WorkerState
-
-Global state for backward compatibility. Kept synchronized with the current session.
-Production code should use session-aware functions; tests may access directly.
-"""
-const WORKER = WorkerState(nothing, nothing)
-
-"""
     _INITIAL_PROJECT_PATH::Ref{Union{String,Nothing}}
 
 Stores the initial project path so new sessions can inherit it.
@@ -82,13 +66,11 @@ State for the optional log viewer feature that displays REPL output in a separat
 # Fields
 - `log_path::Union{String, Nothing}`: Path to the log file (default: `~/.julia/logs/repl.log`)
 - `log_io::Union{IO, Nothing}`: Open file handle for writing logs
-- `viewer_pid::Union{Int, Nothing}`: PID of the viewer process (if spawned)
 - `mode::Symbol`: Current mode - `:none`, `:file`, or `:tmux`
 """
 mutable struct LogViewerState
     log_path::Union{String, Nothing}
     log_io::Union{IO, Nothing}
-    viewer_pid::Union{Int, Nothing}
     mode::Symbol  # :none, :file, :tmux
 end
 
@@ -97,7 +79,7 @@ end
 
 Global state for the log viewer. Configure via `setup_log_viewer!()`.
 """
-const LOG_VIEWER = LogViewerState(nothing, nothing, nothing, :none)
+const LOG_VIEWER = LogViewerState(nothing, nothing, :none)
 
 """
     HighlightConfig

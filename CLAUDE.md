@@ -39,7 +39,7 @@ AgentREPL uses a **multi-session worker subprocess architecture** (via Distribut
 ```
 src/
   AgentREPL.jl           # Main module (imports, includes, exports only)
-  types.jl               # State structs (SessionState, SessionRegistry, WorkerState, LogViewerState, HighlightConfig)
+  types.jl               # State structs (SessionState, SessionRegistry, LogViewerState, HighlightConfig)
   highlighting.jl        # Julia syntax highlighting (uses JuliaSyntaxHighlighting.jl)
   formatting.jl          # Result formatting, stacktrace truncation
   sessions.jl            # Multi-session lifecycle (create, switch, list, destroy)
@@ -104,12 +104,11 @@ Eight tools registered via ModelContextProtocol.jl:
 7. **`session`** - Manage multiple named sessions (create, switch, list, destroy)
 8. **`revise`** - Hot-reload code changes via Revise.jl (revise, track, includet, status)
 
-All tools except `log_viewer` accept an optional `session` parameter.
+All tools except `log_viewer` and `session` accept an optional `session` parameter. The `session` tool identifies targets via its `name` parameter instead.
 
 ### Key Design Decisions
 
 - **Multi-session model**: Each session has its own Distributed.jl worker with isolated state
-- **Backward compatibility**: Global `WORKER` state kept synchronized with current session
 - **Revise.jl auto-loading**: Workers attempt `using Revise` on startup (graceful degradation)
 - **Lazy worker spawning**: Worker created on first tool use, not at server startup
 - **Expression-based IPC**: Uses `remotecall_fetch(Core.eval, worker_id, Main, expr)` to avoid serialization issues

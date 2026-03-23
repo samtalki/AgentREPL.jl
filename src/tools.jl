@@ -1,6 +1,38 @@
 # tools.jl - MCP tool definitions
 
 """
+    _validate_action(params, valid_actions::Vector{String}) -> String
+
+Validate and extract an action parameter. Returns the lowercased action string.
+Throws `ArgumentError` if validation fails.
+"""
+function _validate_action(params, valid_actions::Vector{String})
+    action = get(params, "action", nothing)
+    if action === nothing || !isa(action, AbstractString)
+        throw(ArgumentError("'action' parameter is required and must be a string"))
+    end
+    action_lower = lowercase(strip(action))
+    if action_lower ∉ valid_actions
+        throw(ArgumentError("action must be one of: $(join(valid_actions, ", ")) (got: '$action')"))
+    end
+    return action_lower
+end
+
+"""
+    _require_string_param(params, name::String, action::String) -> String
+
+Extract and validate a required string parameter. Returns the stripped string.
+Throws `ArgumentError` if the parameter is missing or not a string.
+"""
+function _require_string_param(params, name::String, action::String)
+    val = get(params, name, nothing)
+    if val === nothing || !isa(val, AbstractString)
+        throw(ArgumentError("'$name' parameter is required for action '$action'"))
+    end
+    return strip(val)
+end
+
+"""
     create_eval_tool() -> MCPTool
 
 Create the eval tool for evaluating Julia code.
@@ -54,29 +86,45 @@ Use `revise(action="revise")` after editing .jl files to hot-reload changes with
             )
         ],
         handler = params -> begin
-            code = get(params, "code", nothing)
+            try
+                code = get(params, "code", nothing)
 
-            if code === nothing || !isa(code, AbstractString)
-                return TextContent(text = "Error: 'code' parameter is required and must be a string")
+                if code === nothing || !isa(code, AbstractString)
+                    return TextContent(text = "Error: 'code' parameter is required and must be a string")
+                end
+
+                if isempty(strip(code))
+                    return TextContent(text = "Error: 'code' parameter cannot be empty")
+                end
+
+                # Extract optional parameters with validation
+                timeout_val = get(params, "timeout", nothing)
+                timeout = try
+                    timeout_val === nothing ? nothing : Float64(timeout_val)
+                catch
+                    return TextContent(text = "Error: 'timeout' must be a number (got: $(repr(timeout_val)))")
+                end
+                max_output = try
+                    Int(get(params, "max_output", 50_000))
+                catch
+                    return TextContent(text = "Error: 'max_output' must be an integer")
+                end
+                max_stackframes = try
+                    Int(get(params, "max_stackframes", 5))
+                catch
+                    return TextContent(text = "Error: 'max_stackframes' must be an integer")
+                end
+                session_name = get(params, "session", nothing)
+
+                value_str, output, error_str, elapsed = capture_eval_on_worker(code; timeout=timeout, session_name=session_name)
+                log_interaction(code, value_str, output, error_str; elapsed=elapsed)
+
+                result = format_result(code, value_str, output, error_str;
+                                        elapsed=elapsed, max_output=max_output, max_stackframes=max_stackframes)
+                TextContent(text = result)
+            catch e
+                TextContent(text = "Internal error in eval tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
             end
-
-            if isempty(strip(code))
-                return TextContent(text = "Error: 'code' parameter cannot be empty")
-            end
-
-            # Extract optional parameters
-            timeout_val = get(params, "timeout", nothing)
-            timeout = timeout_val === nothing ? nothing : Float64(timeout_val)
-            max_output = Int(get(params, "max_output", 50_000))
-            max_stackframes = Int(get(params, "max_stackframes", 5))
-            session_name = get(params, "session", nothing)
-
-            value_str, output, error_str, elapsed = capture_eval_on_worker(code; timeout=timeout, session_name=session_name)
-            log_interaction(code, value_str, output, error_str; elapsed=elapsed)
-
-            result = format_result(code, value_str, output, error_str;
-                                    elapsed=elapsed, max_output=max_output, max_stackframes=max_stackframes)
-            TextContent(text = result)
         end
     )
 end
@@ -111,13 +159,14 @@ Prefer `revise(action="revise")` for function/method changes — it preserves se
             )
         ],
         handler = params -> begin
-            session_name = get(params, "session", nothing)
-            session = resolve_session(session_name)
+            try
+                session_name = get(params, "session", nothing)
+                session = resolve_session(session_name)
 
-            old_id = session.worker_id
-            new_id = reset_worker!(session)
+                old_id = session.worker_id
+                new_id = reset_worker!(session)
 
-            msg = """
+                msg = """
 Session reset complete.
 - Old worker (ID: $old_id) terminated
 - New worker (ID: $new_id) spawned
@@ -125,11 +174,14 @@ Session reset complete.
 - Packages will need to be reloaded with `using`
 - Revise.jl: $(session.revise_loaded ? "loaded" : "not available")
 """
-            if session.project_path !== nothing
-                msg *= "- Project re-activated: $(session.project_path)\n"
-            end
+                if session.project_path !== nothing
+                    msg *= "- Project re-activated: $(session.project_path)\n"
+                end
 
-            TextContent(text = msg)
+                TextContent(text = msg)
+            catch e
+                TextContent(text = "Internal error in reset tool: $(sprint(showerror, e))")
+            end
         end
     )
 end
@@ -162,25 +214,26 @@ Returns:
             )
         ],
         handler = params -> begin
-            session_name = get(params, "session", nothing)
-            session = resolve_session(session_name)
-            info = get_worker_info(session)
+            try
+                session_name = get(params, "session", nothing)
+                session = resolve_session(session_name)
+                info = get_worker_info(session)
 
-            vars_str = if isempty(info.variables)
-                "(none)"
-            else
-                lines = String[]
-                for v in info.variables
-                    entry = "  $(v.name)::$(v.type)"
-                    if !isempty(v.size)
-                        entry *= " $(v.size)"
+                vars_str = if isempty(info.variables)
+                    "(none)"
+                else
+                    lines = String[]
+                    for v in info.variables
+                        entry = "  $(v.name)::$(v.type)"
+                        if !isempty(v.size)
+                            entry *= " $(v.size)"
+                        end
+                        push!(lines, entry)
                     end
-                    push!(lines, entry)
+                    join(lines, "\n")
                 end
-                join(lines, "\n")
-            end
 
-            msg = """
+                msg = """
 Session: $(session.name)$(session.name == SESSIONS.current ? " (current)" : "")
 Julia Version: $(info.version)
 Active Project: $(info.project)
@@ -190,7 +243,10 @@ $vars_str
 Loaded Modules: $(info.modules)
 Worker ID: $(session.worker_id)
 """
-            TextContent(text = msg)
+                TextContent(text = msg)
+            catch e
+                TextContent(text = "Internal error in info tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
+            end
         end
     )
 end
@@ -248,75 +304,70 @@ Examples:
             )
         ],
         handler = params -> begin
-            action = get(params, "action", nothing)
-            if action === nothing || !isa(action, AbstractString)
-                return TextContent(text = "Error: 'action' parameter is required and must be a string")
-            end
+            try
+                action_lower = _validate_action(params, ["add", "rm", "status", "update", "instantiate", "resolve", "test", "develop", "free"])
 
-            action_lower = lowercase(strip(action))
-            valid_actions = ["add", "rm", "status", "update", "instantiate", "resolve", "test", "develop", "free"]
-            if action_lower ∉ valid_actions
-                return TextContent(text = "Error: action must be one of: $(join(valid_actions, ", ")) (got: '$action')")
-            end
+                packages_str = get(params, "packages", nothing)
+                if packages_str === nothing
+                    packages_str = ""
+                end
 
-            packages_str = get(params, "packages", "")
-            if packages_str === nothing
-                packages_str = ""
-            end
-
-            pkg_list = String[]
-            if !isempty(strip(packages_str))
-                for part in split(packages_str, r"[,\s]+")
-                    cleaned = strip(part)
-                    if !isempty(cleaned)
-                        push!(pkg_list, cleaned)
+                pkg_list = String[]
+                if !isempty(strip(packages_str))
+                    for part in split(packages_str, r"[,\s]+")
+                        cleaned = strip(part)
+                        if !isempty(cleaned)
+                            push!(pkg_list, cleaned)
+                        end
                     end
                 end
-            end
 
-            # Actions that require packages
-            if action_lower in ["add", "rm", "develop", "free"] && isempty(pkg_list)
-                return TextContent(text = "Error: 'packages' parameter is required for action '$action_lower'")
-            end
+                # Actions that require packages
+                if action_lower in ["add", "rm", "develop", "free"] && isempty(pkg_list)
+                    return TextContent(text = "Error: 'packages' parameter is required for action '$action_lower'")
+                end
 
-            session_name = get(params, "session", nothing)
-            result = run_pkg_action_on_worker(action_lower, pkg_list; session_name=session_name)
+                session_name = get(params, "session", nothing)
+                result = run_pkg_action_on_worker(action_lower, pkg_list; session_name=session_name)
 
-            if result.error !== nothing
-                return TextContent(text = "Error during Pkg.$action_lower:\n$(result.error)")
-            end
+                if result.error !== nothing
+                    return TextContent(text = "Error during Pkg.$action_lower:\n$(result.error)")
+                end
 
-            action_summary = if action_lower == "add"
-                "Added $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
-            elseif action_lower == "rm"
-                "Removed $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
-            elseif action_lower == "status"
-                "Package Status:"
-            elseif action_lower == "update"
-                isempty(pkg_list) ? "Updated all packages" : "Updated $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
-            elseif action_lower == "instantiate"
-                "Instantiated environment (downloaded and precompiled dependencies)"
-            elseif action_lower == "resolve"
-                "Resolved dependencies (updated Manifest.toml)"
-            elseif action_lower == "test"
-                isempty(pkg_list) ? "Ran tests for current project" : "Ran tests for: $(join(pkg_list, ", "))"
-            elseif action_lower == "develop"
-                "Put $(length(pkg_list)) package(s) in development mode: $(join(pkg_list, ", "))"
-            elseif action_lower == "free"
-                "Freed $(length(pkg_list)) package(s) from development mode: $(join(pkg_list, ", "))"
-            else
-                "Completed action: $action_lower"
-            end
+                action_summary = if action_lower == "add"
+                    "Added $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                elseif action_lower == "rm"
+                    "Removed $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                elseif action_lower == "status"
+                    "Package Status:"
+                elseif action_lower == "update"
+                    isempty(pkg_list) ? "Updated all packages" : "Updated $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                elseif action_lower == "instantiate"
+                    "Instantiated environment (downloaded and precompiled dependencies)"
+                elseif action_lower == "resolve"
+                    "Resolved dependencies (updated Manifest.toml)"
+                elseif action_lower == "test"
+                    isempty(pkg_list) ? "Ran tests for current project" : "Ran tests for: $(join(pkg_list, ", "))"
+                elseif action_lower == "develop"
+                    "Put $(length(pkg_list)) package(s) in development mode: $(join(pkg_list, ", "))"
+                elseif action_lower == "free"
+                    "Freed $(length(pkg_list)) package(s) from development mode: $(join(pkg_list, ", "))"
+                else
+                    "Completed action: $action_lower"
+                end
 
-            result_parts = [action_summary]
-            if !isempty(strip(result.stdout))
-                push!(result_parts, "\nOutput:\n$(result.stdout)")
-            end
-            if !isempty(strip(result.stderr))
-                push!(result_parts, "\n[stderr]\n$(result.stderr)")
-            end
+                result_parts = [action_summary]
+                if !isempty(strip(result.stdout))
+                    push!(result_parts, "\nOutput:\n$(result.stdout)")
+                end
+                if !isempty(strip(result.stderr))
+                    push!(result_parts, "\n[stderr]\n$(result.stderr)")
+                end
 
-            TextContent(text = join(result_parts, ""))
+                TextContent(text = join(result_parts, ""))
+            catch e
+                TextContent(text = "Internal error in pkg tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
+            end
         end
     )
 end
@@ -359,18 +410,22 @@ After activation, use `pkg(action="instantiate")` to install dependencies.
             )
         ],
         handler = params -> begin
-            path = get(params, "path", nothing)
-            if path === nothing || !isa(path, AbstractString)
-                return TextContent(text = "Error: 'path' parameter is required and must be a string")
-            end
+            try
+                path = get(params, "path", nothing)
+                if path === nothing || !isa(path, AbstractString)
+                    return TextContent(text = "Error: 'path' parameter is required and must be a string")
+                end
 
-            session_name = get(params, "session", nothing)
-            result = activate_project_on_worker!(path; session_name=session_name)
+                session_name = get(params, "session", nothing)
+                result = activate_project_on_worker!(path; session_name=session_name)
 
-            if result.success
-                TextContent(text = "Activated project: $(result.project)\n\nUse `pkg(action=\"instantiate\")` to install dependencies if needed.")
-            else
-                TextContent(text = "Error activating project: $(result.error)")
+                if result.success
+                    TextContent(text = "Activated project: $(result.project)\n\nUse `pkg(action=\"instantiate\")` to install dependencies if needed.")
+                else
+                    TextContent(text = "Error activating project: $(result.error)")
+                end
+            catch e
+                TextContent(text = "Internal error in activate tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
             end
         end
     )
@@ -405,25 +460,29 @@ The log file is written to ~/.julia/logs/repl.log by default.
             )
         ],
         handler = params -> begin
-            mode_str = get(params, "mode", "auto")
-            if mode_str == "off"
-                close_log_viewer!()
-                return TextContent(text = "Log viewer disabled.")
-            end
+            try
+                mode_str = get(params, "mode", "auto")
+                if mode_str == "off"
+                    close_log_viewer!()
+                    return TextContent(text = "Log viewer disabled.")
+                end
 
-            mode = Symbol(mode_str)
-            if mode ∉ [:auto, :tmux, :file]
-                return TextContent(text = "Error: mode must be 'auto', 'tmux', 'file', or 'off'")
-            end
+                mode = Symbol(mode_str)
+                if mode ∉ [:auto, :tmux, :file]
+                    return TextContent(text = "Error: mode must be 'auto', 'tmux', 'file', or 'off'")
+                end
 
-            path = setup_log_viewer!(; mode=mode)
+                path = setup_log_viewer!(; mode=mode)
 
-            if LOG_VIEWER.mode == :tmux
-                TextContent(text = "Log viewer enabled (tmux).\nLog file: $path\nAttach with: tmux attach -t julia-repl")
-            elseif LOG_VIEWER.mode == :file
-                TextContent(text = "Log viewer enabled.\nLog file: $path\nA terminal window should have opened. If not, run: tail -f $path")
-            else
-                TextContent(text = "Log viewer enabled.\nLog file: $path\nRun in another terminal: tail -f $path")
+                if LOG_VIEWER.mode == :tmux
+                    TextContent(text = "Log viewer enabled (tmux).\nLog file: $path\nAttach with: tmux attach -t julia-repl")
+                elseif LOG_VIEWER.mode == :file
+                    TextContent(text = "Log viewer enabled.\nLog file: $path\nA terminal window should have opened. If not, run: tail -f $path")
+                else
+                    TextContent(text = "Log viewer enabled.\nLog file: $path\nRun in another terminal: tail -f $path")
+                end
+            catch e
+                TextContent(text = "Internal error in log_viewer tool: $(sprint(showerror, e))")
             end
         end
     )
@@ -470,68 +529,56 @@ Examples:
             )
         ],
         handler = params -> begin
-            action = get(params, "action", nothing)
-            if action === nothing || !isa(action, AbstractString)
-                return TextContent(text = "Error: 'action' parameter is required and must be a string")
-            end
+            try
+                action_lower = _validate_action(params, ["create", "switch", "list", "destroy"])
 
-            action_lower = lowercase(strip(action))
-            if action_lower ∉ ["create", "switch", "list", "destroy"]
-                return TextContent(text = "Error: action must be one of: create, switch, list, destroy (got: '$action')")
-            end
+                if action_lower in ["create", "switch", "destroy"]
+                    name = _require_string_param(params, "name", action_lower)
+                end
 
-            name = get(params, "name", nothing)
+                if action_lower == "create"
+                    session = create_session!(name)
+                    TextContent(text = "Session '$(session.name)' created and set as current.\nWorker will spawn on first eval.")
 
-            if action_lower in ["create", "switch", "destroy"] && (name === nothing || !isa(name, AbstractString) || isempty(strip(name)))
-                return TextContent(text = "Error: 'name' parameter is required for action '$action_lower'")
-            end
-
-            if action_lower == "create"
-                session = create_session!(strip(name))
-                TextContent(text = "Session '$(session.name)' created and set as current.\nWorker will spawn on first eval.")
-
-            elseif action_lower == "switch"
-                try
-                    session = switch_session!(strip(name))
+                elseif action_lower == "switch"
+                    session = switch_session!(name)
                     msg = "Switched to session '$(session.name)'.\n"
                     msg *= "Worker ID: $(something(session.worker_id, "not yet spawned"))\n"
                     msg *= "Project: $(something(session.project_path, "default"))\n"
                     msg *= "Revise.jl: $(session.revise_loaded ? "loaded" : "not loaded")"
                     TextContent(text = msg)
-                catch e
-                    TextContent(text = "Error: $(sprint(showerror, e))")
-                end
 
-            elseif action_lower == "list"
-                sessions = list_sessions()
-                if isempty(sessions)
-                    return TextContent(text = "No sessions. Create one with session(action=\"create\", name=\"myname\") or just call eval (auto-creates 'default').")
-                end
+                elseif action_lower == "list"
+                    sessions = list_sessions()
+                    if isempty(sessions)
+                        return TextContent(text = "No sessions. Create one with session(action=\"create\", name=\"myname\") or just call eval (auto-creates 'default').")
+                    end
 
-                lines = String["Sessions:"]
-                for s in sessions
-                    marker = s.is_current ? " *" : "  "
-                    worker = s.worker_id === nothing ? "not spawned" : "worker $(s.worker_id)"
-                    project = s.project_path === nothing ? "default env" : s.project_path
-                    revise = s.revise ? "Revise" : "no Revise"
-                    age_min = round(s.age_seconds / 60; digits=1)
-                    push!(lines, "$marker $(s.name) — $worker, $project, $revise ($(age_min)min)")
-                end
-                TextContent(text = join(lines, "\n"))
+                    lines = String["Sessions:"]
+                    for s in sessions
+                        marker = s.is_current ? " *" : "  "
+                        worker = s.worker_id === nothing ? "not spawned" : "worker $(s.worker_id)"
+                        project = s.project === nothing ? "default env" : s.project
+                        revise = s.revise ? "Revise" : "no Revise"
+                        age_min = round(s.age_seconds / 60; digits=1)
+                        push!(lines, "$marker $(s.name) — $worker, $project, $revise ($(age_min)min)")
+                    end
+                    TextContent(text = join(lines, "\n"))
 
-            elseif action_lower == "destroy"
-                try
-                    destroy_session!(strip(name))
-                    remaining = list_sessions()
+                elseif action_lower == "destroy"
+                    destroy_session!(name)
                     current = SESSIONS.current
-                    msg = "Session '$(strip(name))' destroyed."
+                    msg = "Session '$(name)' destroyed."
                     if current !== nothing
                         msg *= "\nCurrent session: $current"
                     end
                     TextContent(text = msg)
-                catch e
-                    TextContent(text = "Error: $(sprint(showerror, e))")
+
+                else
+                    error("Unexpected action: $action_lower")
                 end
+            catch e
+                TextContent(text = "Internal error in session tool: $(sprint(showerror, e))")
             end
         end
     )
@@ -587,58 +634,58 @@ Examples:
             )
         ],
         handler = params -> begin
-            action = get(params, "action", nothing)
-            if action === nothing || !isa(action, AbstractString)
-                return TextContent(text = "Error: 'action' parameter is required and must be a string")
-            end
+            try
+                action_lower = _validate_action(params, ["revise", "track", "includet", "status"])
 
-            action_lower = lowercase(strip(action))
-            if action_lower ∉ ["revise", "track", "includet", "status"]
-                return TextContent(text = "Error: action must be one of: revise, track, includet, status (got: '$action')")
-            end
+                session_name = get(params, "session", nothing)
+                session = resolve_session(session_name)
 
-            session_name = get(params, "session", nothing)
-            session = resolve_session(session_name)
-
-            # Ensure worker exists for all actions
-            ensure_worker!(session)
-
-            if action_lower == "revise"
-                result = revise_on_worker!(session)
-                TextContent(text = result.message)
-
-            elseif action_lower == "track"
-                path = get(params, "path", nothing)
-                if path === nothing || !isa(path, AbstractString)
-                    return TextContent(text = "Error: 'path' parameter is required for action 'track'")
-                end
-                result = track_file_on_worker!(session, strip(path))
-                TextContent(text = result.message)
-
-            elseif action_lower == "includet"
-                path = get(params, "path", nothing)
-                if path === nothing || !isa(path, AbstractString)
-                    return TextContent(text = "Error: 'path' parameter is required for action 'includet'")
-                end
-                result = includet_on_worker!(session, strip(path))
-                TextContent(text = result.message)
-
-            elseif action_lower == "status"
-                status = get_revise_status(session)
-                if !status.available
-                    return TextContent(text = "Revise.jl is not available in session '$(session.name)'.\nInstall it with: pkg(action=\"add\", packages=\"Revise\")")
+                # Validate path upfront for actions that need it
+                if action_lower in ["track", "includet"]
+                    path = _require_string_param(params, "path", action_lower)
                 end
 
-                lines = String["Revise.jl Status (session: $(session.name)):"]
-                push!(lines, "Watched packages: $(isempty(status.watched_packages) ? "(none)" : join(status.watched_packages, ", "))")
-                push!(lines, "Tracked files: $(isempty(status.tracked_files) ? "(none)" : string(length(status.tracked_files), " files"))")
-                for f in status.tracked_files
-                    push!(lines, "  - $f")
+                if action_lower == "revise"
+                    ensure_worker!(session)
+                    result = revise_on_worker!(session)
+                    TextContent(text = result.message)
+
+                elseif action_lower == "track"
+                    ensure_worker!(session)
+                    result = track_file_on_worker!(session, path)
+                    TextContent(text = result.message)
+
+                elseif action_lower == "includet"
+                    ensure_worker!(session)
+                    result = includet_on_worker!(session, path)
+                    TextContent(text = result.message)
+
+                elseif action_lower == "status"
+                    status = get_revise_status(session)
+                    if !status.available
+                        msg = "Revise.jl is not available in session '$(session.name)'.\nInstall it with: pkg(action=\"add\", packages=\"Revise\")"
+                        if !isempty(status.note)
+                            msg *= "\nNote: $(status.note)"
+                        end
+                        return TextContent(text = msg)
+                    end
+
+                    lines = String["Revise.jl Status (session: $(session.name)):"]
+                    push!(lines, "Watched packages: $(isempty(status.watched_packages) ? "(none)" : join(status.watched_packages, ", "))")
+                    push!(lines, "Tracked files: $(isempty(status.tracked_files) ? "(none)" : string(length(status.tracked_files), " files"))")
+                    for f in status.tracked_files
+                        push!(lines, "  - $f")
+                    end
+                    if !isempty(status.note)
+                        push!(lines, "Note: $(status.note)")
+                    end
+                    TextContent(text = join(lines, "\n"))
+
+                else
+                    error("Unexpected action: $action_lower")
                 end
-                if !isempty(status.note)
-                    push!(lines, "Note: $(status.note)")
-                end
-                TextContent(text = join(lines, "\n"))
+            catch e
+                TextContent(text = "Internal error in revise tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
             end
         end
     )

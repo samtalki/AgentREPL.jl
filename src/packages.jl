@@ -34,14 +34,15 @@ function activate_project_on_worker!(path::String; session_name::Union{String,No
         end
     end
 
-    result = remotecall_fetch(Core.eval, worker_id, Main, activate_expr)
-
-    if result.success
-        session.project_path = result.project
-        sync_worker_global!(session)
+    try
+        result = remotecall_fetch(Core.eval, worker_id, Main, activate_expr)
+        if result.success
+            session.project_path = result.project
+        end
+        return result
+    catch e
+        return (success = false, error = "Worker communication failed during Pkg.activate: $(sprint(showerror, e))")
     end
-
-    return result
 end
 
 """
@@ -100,5 +101,10 @@ function run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; sess
         end
     end
 
-    return remotecall_fetch(Core.eval, worker_id, Main, pkg_expr)
+    try
+        return remotecall_fetch(Core.eval, worker_id, Main, pkg_expr)
+    catch e
+        return (error = "Worker communication failed during Pkg.$action: $(sprint(showerror, e))",
+                stdout = "", stderr = "")
+    end
 end

@@ -1,11 +1,15 @@
 # Test multi-session management
 
-@testset "Session Management" begin
-    # Clean up any existing sessions first
+function _cleanup_all_test_sessions!()
     for name in collect(keys(AgentREPL.SESSIONS.sessions))
         try; AgentREPL.destroy_session!(name); catch; end
     end
     AgentREPL.SESSIONS.current = nothing
+end
+
+@testset "Session Management" begin
+    # Clean up any existing sessions first
+    _cleanup_all_test_sessions!()
 
     @testset "Default session auto-creation" begin
         session = AgentREPL.get_current_session!()
@@ -21,6 +25,15 @@
         @test haskey(AgentREPL.SESSIONS.sessions, "test-session")
     end
 
+    @testset "Create session idempotency" begin
+        # Creating same session again should return existing one
+        session1 = AgentREPL.create_session!("idem-test")
+        session2 = AgentREPL.create_session!("idem-test")
+        @test session1 === session2  # Same object
+        @test length([k for k in keys(AgentREPL.SESSIONS.sessions) if k == "idem-test"]) == 1
+        AgentREPL.destroy_session!("idem-test")
+    end
+
     @testset "Switch session" begin
         AgentREPL.create_session!("session-a")
         AgentREPL.create_session!("session-b")
@@ -34,6 +47,10 @@
 
     @testset "Switch to nonexistent session throws" begin
         @test_throws ErrorException AgentREPL.switch_session!("nonexistent")
+    end
+
+    @testset "Resolve nonexistent session throws" begin
+        @test_throws ErrorException AgentREPL.resolve_session("nonexistent-session-xyz")
     end
 
     @testset "List sessions" begin
@@ -71,17 +88,7 @@
         @test value_b == "222"
     end
 
-    @testset "WORKER global stays in sync" begin
-        AgentREPL.switch_session!("session-a")
-        session_a = AgentREPL.SESSIONS.sessions["session-a"]
-        @test AgentREPL.WORKER.worker_id == session_a.worker_id
-
-        AgentREPL.switch_session!("session-b")
-        session_b = AgentREPL.SESSIONS.sessions["session-b"]
-        @test AgentREPL.WORKER.worker_id == session_b.worker_id
-    end
-
-    @testset "Destroy session" begin
+    @testset "Destroy non-current session" begin
         # Create a session and eval something to spawn worker
         AgentREPL.create_session!("doomed")
         AgentREPL.capture_eval_on_worker("x = 1")
@@ -95,7 +102,44 @@
         @test !haskey(AgentREPL.SESSIONS.sessions, "doomed")
     end
 
+    @testset "Destroy current session auto-switches" begin
+        AgentREPL.create_session!("current-to-destroy")
+        AgentREPL.create_session!("remaining")
+        AgentREPL.switch_session!("current-to-destroy")
+        @test AgentREPL.SESSIONS.current == "current-to-destroy"
+
+        AgentREPL.destroy_session!("current-to-destroy")
+
+        # Should have auto-switched to a remaining session
+        @test AgentREPL.SESSIONS.current !== nothing
+        @test AgentREPL.SESSIONS.current != "current-to-destroy"
+        @test haskey(AgentREPL.SESSIONS.sessions, AgentREPL.SESSIONS.current)
+
+        AgentREPL.destroy_session!("remaining")
+    end
+
+    @testset "Destroy only session sets current to nothing" begin
+        # Clean slate
+        for name in collect(keys(AgentREPL.SESSIONS.sessions))
+            try; AgentREPL.destroy_session!(name); catch; end
+        end
+        AgentREPL.SESSIONS.current = nothing
+
+        AgentREPL.create_session!("only-session")
+        @test AgentREPL.SESSIONS.current == "only-session"
+
+        AgentREPL.destroy_session!("only-session")
+        @test AgentREPL.SESSIONS.current === nothing
+        @test isempty(AgentREPL.SESSIONS.sessions)
+
+        # Next get_current_session! should auto-create "default"
+        session = AgentREPL.get_current_session!()
+        @test session.name == "default"
+    end
+
     @testset "Session-targeted eval" begin
+        AgentREPL.create_session!("session-a")
+        AgentREPL.create_session!("session-b")
         AgentREPL.switch_session!("session-a")
         AgentREPL.capture_eval_on_worker("targeted_var = 999"; session_name="session-b")
 
@@ -134,7 +178,5 @@
             try; AgentREPL.destroy_session!(name); catch; end
         end
         AgentREPL.SESSIONS.current = nothing
-        AgentREPL.WORKER.worker_id = nothing
-        AgentREPL.WORKER.project_path = nothing
     end
 end

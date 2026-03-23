@@ -86,7 +86,8 @@ end
         @test contains(error_str, "1.0s")
         @test elapsed >= 1.0
         # Worker should have been killed
-        @test AgentREPL.WORKER.worker_id === nothing
+        session = AgentREPL.get_current_session!()
+        @test session.worker_id === nothing
     end
 
     @testset "Next eval after timeout spawns fresh worker" begin
@@ -94,7 +95,8 @@ end
         value_str, output, error_str, _ = AgentREPL.capture_eval_on_worker("42")
         @test error_str === nothing
         @test value_str == "42"
-        @test AgentREPL.WORKER.worker_id !== nothing
+        session = AgentREPL.get_current_session!()
+        @test session.worker_id !== nothing
     end
 
     @testset "No timeout when code completes fast" begin
@@ -217,7 +219,8 @@ end
     AgentREPL.capture_eval_on_worker("test_user_symbol_789 = 123")
     AgentREPL.capture_eval_on_worker("test_vec_abc = [1.0, 2.0, 3.0]")
 
-    info = AgentREPL.get_worker_info()
+    session = AgentREPL.get_current_session!()
+    info = AgentREPL.get_worker_info(session)
 
     # Should have expected fields
     @test haskey(info, :version)
@@ -252,8 +255,9 @@ end
         @test value_str == "999"
 
         # Reset the worker
-        old_id = AgentREPL.WORKER.worker_id
-        new_id = AgentREPL.reset_worker!()
+        session = AgentREPL.get_current_session!()
+        old_id = session.worker_id
+        new_id = AgentREPL.reset_worker!(session)
         @test new_id != old_id
 
         # Variable should no longer exist
@@ -264,14 +268,15 @@ end
 
     @testset "Worker persists project path on reset" begin
         # Get current project path
-        info_before = AgentREPL.get_worker_info()
+        session = AgentREPL.get_current_session!()
+        info_before = AgentREPL.get_worker_info(session)
         project_before = info_before.project
 
         # Reset
-        AgentREPL.reset_worker!()
+        AgentREPL.reset_worker!(session)
 
         # Project should be reactivated
-        info_after = AgentREPL.get_worker_info()
+        info_after = AgentREPL.get_worker_info(session)
         @test info_after.project == project_before
     end
 end
@@ -343,6 +348,7 @@ end
 
 # Cleanup: Kill worker at end of tests
 @testset "Cleanup" begin
-    AgentREPL.kill_worker!()
-    @test AgentREPL.WORKER.worker_id === nothing
+    session = AgentREPL.get_current_session!()
+    AgentREPL.kill_worker!(session)
+    @test session.worker_id === nothing
 end

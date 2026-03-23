@@ -75,7 +75,7 @@ Present results in REPL-style with proper formatting:
 
 ```julia
 julia> A = [1 2 3; 4 5 6; 7 8 9]
-3x3 Matrix{Int64}:
+3×3 Matrix{Int64}:
  1  2  3
  4  5  6
  7  8  9

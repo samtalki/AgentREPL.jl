@@ -1,6 +1,6 @@
 # logging.jl - Log viewer functionality
 
-# ANSI color codes for syntax highlighting
+# ANSI escape codes used throughout for terminal styling (formatting, errors, log viewer)
 const ANSI_RESET = "\e[0m"
 const ANSI_BOLD = "\e[1m"
 const ANSI_GREEN = "\e[32m"
@@ -234,41 +234,47 @@ function log_interaction(code::String, value_str::String, output::String, error_
                           elapsed::Union{Float64,Nothing}=nothing)
     LOG_VIEWER.log_io === nothing && return
 
-    io = LOG_VIEWER.log_io
+    try
+        io = LOG_VIEWER.log_io
 
-    # Dim separator line
-    println(io, ANSI_DIM, "─"^60, ANSI_RESET)
+        # Dim separator line
+        println(io, ANSI_DIM, "─"^60, ANSI_RESET)
 
-    # Apply syntax highlighting to code (force ANSI for terminal)
-    highlighted_code = highlight_code(code; format=:ansi)
+        # Apply syntax highlighting to code (force ANSI for terminal)
+        highlighted_code = highlight_code(code; format=:ansi)
 
-    # Format with continuation lines for multiline code
-    code_lines = split(strip(highlighted_code), '\n')
-    println(io, ANSI_GREEN, ANSI_BOLD, "julia> ", ANSI_RESET, code_lines[1])
-    for line in code_lines[2:end]
-        println(io, "       ", line)
-    end
-    println(io)
-
-    if error_str !== nothing
-        # Red error output
-        println(io, ANSI_RED, ANSI_BOLD, "ERROR: ", ANSI_RESET, ANSI_RED, error_str, ANSI_RESET)
-    else
-        if !isempty(strip(output))
-            # Cyan for printed output
-            println(io, ANSI_CYAN, strip(output), ANSI_RESET)
+        # Format with continuation lines for multiline code
+        code_lines = split(strip(highlighted_code), '\n')
+        println(io, ANSI_GREEN, ANSI_BOLD, "julia> ", ANSI_RESET, code_lines[1])
+        for line in code_lines[2:end]
+            println(io, "       ", line)
         end
-        # Normal color for result
-        println(io, value_str)
-    end
+        println(io)
 
-    # Show timing if available
-    if elapsed !== nothing
-        println(io, ANSI_DIM, format_elapsed(elapsed), ANSI_RESET)
-    end
+        if error_str !== nothing
+            # Red error output
+            println(io, ANSI_RED, ANSI_BOLD, "ERROR: ", ANSI_RESET, ANSI_RED, error_str, ANSI_RESET)
+        else
+            if !isempty(strip(output))
+                # Cyan for printed output
+                println(io, ANSI_CYAN, strip(output), ANSI_RESET)
+            end
+            # Normal color for result
+            println(io, value_str)
+        end
 
-    println(io)
-    flush(io)
+        # Show timing if available
+        if elapsed !== nothing
+            println(io, ANSI_DIM, format_elapsed(elapsed), ANSI_RESET)
+        end
+
+        println(io)
+        flush(io)
+    catch e
+        @warn "Log viewer write failed, disabling" exception=e
+        try; close(LOG_VIEWER.log_io); catch; end
+        LOG_VIEWER.log_io = nothing
+    end
 end
 
 """
@@ -289,7 +295,8 @@ function close_log_viewer!()
     if LOG_VIEWER.mode == :tmux
         try
             run(ignorestatus(pipeline(`tmux kill-session -t julia-repl`, devnull)))
-        catch
+        catch e
+            @debug "tmux cleanup failed" exception=e
         end
     end
 
