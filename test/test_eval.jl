@@ -430,6 +430,50 @@ end
     end
 end
 
+@testset "Sparkline" begin
+    @testset "sparkline rendering" begin
+        @test AgentREPL.sparkline(Float64[]) == ""
+        @test AgentREPL.sparkline([1.0, 1.0, 1.0]) == "▄▄▄"
+        result = AgentREPL.sparkline([0.0, 0.5, 1.0])
+        chars = collect(result)
+        @test length(chars) == 3
+        @test chars[1] == '▁'  # min
+        @test chars[3] == '█'  # max
+    end
+
+    @testset "eval_timings accumulation" begin
+        session = AgentREPL.get_current_session!()
+        empty!(session.eval_timings)
+        AgentREPL.capture_eval_on_worker("1+1")
+        AgentREPL.capture_eval_on_worker("2+2")
+        AgentREPL.capture_eval_on_worker("3+3")
+        @test length(session.eval_timings) == 3
+        @test all(t -> t > 0, session.eval_timings)
+    end
+
+    @testset "eval_timings cap at 50" begin
+        session = AgentREPL.get_current_session!()
+        empty!(session.eval_timings)
+        for i in 1:55
+            push!(session.eval_timings, Float64(i))
+        end
+        # Simulate the cap logic from capture_eval_on_worker
+        while length(session.eval_timings) > 50
+            popfirst!(session.eval_timings)
+        end
+        @test length(session.eval_timings) == 50
+        @test session.eval_timings[1] == 6.0  # first 5 were popped
+    end
+
+    @testset "reset clears timings" begin
+        session = AgentREPL.get_current_session!()
+        AgentREPL.capture_eval_on_worker("1+1")
+        @test !isempty(session.eval_timings)
+        AgentREPL.reset_worker!(session)
+        @test isempty(session.eval_timings)
+    end
+end
+
 # Cleanup: Kill worker at end of tests
 @testset "Cleanup" begin
     session = AgentREPL.get_current_session!()
