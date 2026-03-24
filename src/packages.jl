@@ -41,6 +41,7 @@ function activate_project_on_worker!(path::String; session_name::Union{String,No
         end
         return result
     catch e
+        _handle_worker_crash!(session, e)
         return (success = false, error = "Worker communication failed during Pkg.activate: $(sprint(showerror, e))")
     end
 end
@@ -104,6 +105,7 @@ function run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; sess
     try
         return remotecall_fetch(Core.eval, worker_id, Main, pkg_expr)
     catch e
+        _handle_worker_crash!(session, e)
         return (error = "Worker communication failed during Pkg.$action: $(sprint(showerror, e))",
                 stdout = "", stderr = "")
     end

@@ -4,7 +4,7 @@ This plugin provides a persistent Julia REPL for Claude Code with multi-session 
 
 ## Prerequisites
 
-- Julia 1.10+ installed and available in PATH (verify with `julia --version`)
+- Julia 1.12+ installed and available in PATH (verify with `julia --version`)
 - AgentREPL.jl package (this repository)
 
 ## Installation
@@ -36,7 +36,7 @@ The plugin automatically configures the `julia-repl` MCP server which provides:
 - `session` - **Manage multiple named sessions** (create, switch, list, destroy)
 - `revise` - **Hot-reload code changes** via Revise.jl (revise, track, includet, status)
 
-All tools accept an optional `session` parameter to target a specific session.
+All tools except `log_viewer` and `session` accept an optional `session` parameter. The `session` tool identifies targets via its `name` parameter.
 
 ### Skills
 

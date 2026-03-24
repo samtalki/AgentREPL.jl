@@ -281,6 +281,54 @@ end
     end
 end
 
+@testset "Worker Crash Recovery" begin
+    @testset "exit() triggers crash recovery" begin
+        # Ensure we have a worker
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        @test session.worker_id !== nothing
+
+        # exit() should crash the worker
+        value_str, output, error_str, elapsed = AgentREPL.capture_eval_on_worker("exit()")
+        @test error_str !== nothing
+        @test contains(error_str, "crashed") || contains(error_str, "ProcessExitedException")
+        @test session.worker_id === nothing
+        @test session.revise_loaded == false
+    end
+
+    @testset "Eval succeeds after crash" begin
+        # Next eval should auto-spawn a fresh worker
+        value_str, output, error_str, _ = AgentREPL.capture_eval_on_worker("42")
+        @test error_str === nothing
+        @test value_str == "42"
+        session = AgentREPL.get_current_session!()
+        @test session.worker_id !== nothing
+    end
+end
+
+@testset "Project Activation" begin
+    @testset "Activate current directory" begin
+        result = AgentREPL.activate_project_on_worker!(".")
+        @test result.success == true
+        @test result.project isa String
+    end
+
+    @testset "Activate nonexistent path" begin
+        result = AgentREPL.activate_project_on_worker!("/nonexistent/project/path")
+        # Pkg.activate with a nonexistent path may create a new env or error depending on Julia version
+        # Either way it should not throw
+        @test result isa NamedTuple
+    end
+
+    @testset "Session project_path updated on success" begin
+        session = AgentREPL.get_current_session!()
+        result = AgentREPL.activate_project_on_worker!(".")
+        if result.success
+            @test session.project_path == result.project
+        end
+    end
+end
+
 @testset "Project Path Persistence" begin
     @testset "Project path survives failed reactivation" begin
         session = AgentREPL.get_current_session!()

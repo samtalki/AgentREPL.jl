@@ -41,7 +41,11 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
     log_path = get(ENV, "JULIA_REPL_LOG", nothing)
 
     if viewer_mode != :none
-        setup_log_viewer!(; mode=viewer_mode, log_path=log_path)
+        try
+            setup_log_viewer!(; mode=viewer_mode, log_path=log_path)
+        catch e
+            @warn "Could not set up log viewer, continuing without it" mode=viewer_mode log_path=log_path exception=(e, catch_backtrace())
+        end
     end
 
     # NOTE: Worker is spawned lazily on first tool use to avoid

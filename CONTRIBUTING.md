@@ -6,7 +6,7 @@ Thank you for your interest in contributing to AgentREPL.jl! This document provi
 
 ### Prerequisites
 
-- Julia 1.11 or later
+- Julia 1.12 or later
 - Git
 - (Optional) Claude Code for testing the MCP integration
 

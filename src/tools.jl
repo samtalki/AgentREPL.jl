@@ -366,7 +366,11 @@ Examples:
 
                 TextContent(text = join(result_parts, ""))
             catch e
-                TextContent(text = "Internal error in pkg tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
+                if e isa ArgumentError
+                    TextContent(text = "Error: $(e.msg)")
+                else
+                    TextContent(text = "Internal error in pkg tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
+                end
             end
         end
     )
@@ -578,7 +582,11 @@ Examples:
                     error("Unexpected action: $action_lower")
                 end
             catch e
-                TextContent(text = "Internal error in session tool: $(sprint(showerror, e))")
+                if e isa ArgumentError
+                    TextContent(text = "Error: $(e.msg)")
+                else
+                    TextContent(text = "Internal error in session tool: $(sprint(showerror, e))")
+                end
             end
         end
     )
@@ -685,7 +693,11 @@ Examples:
                     error("Unexpected action: $action_lower")
                 end
             catch e
-                TextContent(text = "Internal error in revise tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
+                if e isa ArgumentError
+                    TextContent(text = "Error: $(e.msg)")
+                else
+                    TextContent(text = "Internal error in revise tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
+                end
             end
         end
     )

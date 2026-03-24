@@ -114,11 +114,11 @@ All tools except `log_viewer` and `session` accept an optional `session` paramet
 - **Expression-based IPC**: Uses `remotecall_fetch(Core.eval, worker_id, Main, expr)` to avoid serialization issues
 - **STDIO transport only**: No network ports for security
 - **Environment persistence**: Activated environment survives reset
-- **Result-first formatting**: Shows Result/Error first for better collapsed view UX
+- **Output-then-result formatting**: Shows stdout first, then result/error, then timing — optimized for collapsed view UX
 
 ## Testing
 
-Tests are in `test/runtests.jl`, `test/test_eval.jl`, `test/test_sessions.jl`, and `test/test_highlighting.jl` covering:
+Tests are in `test/runtests.jl`, `test/test_eval.jl`, `test/test_sessions.jl`, `test/test_revise.jl`, and `test/test_highlighting.jl` covering:
 - Code evaluation (arithmetic, variables, functions, multi-line)
 - Output capture and error handling
 - Result formatting and truncation
@@ -126,6 +126,7 @@ Tests are in `test/runtests.jl`, `test/test_eval.jl`, `test/test_sessions.jl`, a
 - Multi-session management (create, switch, isolate, destroy)
 - Session-targeted evaluation
 - Pkg actions (test, develop, free)
+- Revise.jl integration (status, availability)
 - Syntax highlighting (ANSI, markdown, plain formats)
 
 ## Entry Point

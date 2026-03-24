@@ -34,6 +34,7 @@ function revise_on_worker!(session::SessionState)
         end)
         return result
     catch e
+        _handle_worker_crash!(session, e)
         return (success = false, message = "Error calling Revise.revise(): $(sprint(showerror, e))")
     end
 end
@@ -56,8 +57,8 @@ function _revise_file_action(session::SessionState, filepath::String, action::Sy
 
     verb = action == :track ? "tracking" : "including"
     success_msg = action == :track ?
-        "Now tracking '\$fp' with Revise. Changes will be auto-loaded on revise()." :
-        "Included and tracking '\$fp'. Changes will be auto-loaded on revise()."
+        "Now tracking '$(filepath)' with Revise. Changes will be auto-loaded on revise()." :
+        "Included and tracking '$(filepath)'. Changes will be auto-loaded on revise()."
 
     try
         result = remotecall_fetch(Core.eval, session.worker_id, Main, quote
@@ -72,6 +73,7 @@ function _revise_file_action(session::SessionState, filepath::String, action::Sy
         end)
         return result
     catch e
+        _handle_worker_crash!(session, e)
         return (success = false, message = "Error $verb file: $(sprint(showerror, e))")
     end
 end
@@ -125,6 +127,7 @@ function get_revise_status(session::SessionState)
         end)
         return result
     catch e
+        _handle_worker_crash!(session, e)
         return (available = false, tracked_files = String[], watched_packages = String[],
                 note = "Failed to query Revise status: $(sprint(showerror, e))")
     end

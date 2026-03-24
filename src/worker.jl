@@ -1,6 +1,19 @@
 # worker.jl - Distributed worker lifecycle management
 
 """
+    _handle_worker_crash!(session::SessionState, e)
+
+Reset session worker state if `e` is a `ProcessExitedException`.
+Centralizes crash cleanup so all `remotecall_fetch` call sites stay consistent.
+"""
+function _handle_worker_crash!(session::SessionState, e)
+    if e isa Distributed.ProcessExitedException
+        session.worker_id = nothing
+        session.revise_loaded = false
+    end
+end
+
+"""
     ensure_worker!(session::SessionState) -> Int
 
 Ensure a worker process exists for the given session, creating one if needed.
@@ -8,8 +21,16 @@ Returns the worker ID. Also attempts to load Revise.jl on the worker.
 """
 function ensure_worker!(session::SessionState)
     if session.worker_id === nothing || !(session.worker_id in workers())
-        project_dir = dirname(Pkg.project().path)
-        new_workers = addprocs(1; exeflags=`--project=$project_dir`)
+        project_dir = try
+            dirname(Pkg.project().path)
+        catch
+            error("Cannot determine project directory for session '$(session.name)'. Ensure Julia is started with --project=<path>.")
+        end
+        new_workers = try
+            addprocs(1; exeflags=`--project=$project_dir`)
+        catch e
+            error("Failed to spawn worker for session '$(session.name)': $(sprint(showerror, e))")
+        end
         session.worker_id = first(new_workers)
 
         # Core.eval avoids closure serialization issues with remotecall
@@ -22,7 +43,16 @@ function ensure_worker!(session::SessionState)
             session.revise_loaded = false
             if e isa Distributed.RemoteException || e isa Distributed.ProcessExitedException
                 @warn "Worker may have crashed while loading Revise.jl" session=session.name exception=(e, catch_backtrace())
+            else
+                @warn "Unexpected error loading Revise.jl on worker" session=session.name exception=(e, catch_backtrace())
             end
+        end
+
+        # If Revise loading crashed the worker, respawn
+        if session.worker_id !== nothing && !(session.worker_id in workers())
+            session.worker_id = nothing
+            session.revise_loaded = false
+            return ensure_worker!(session)
         end
 
         if session.project_path !== nothing
@@ -52,7 +82,8 @@ function kill_worker!(session::SessionState)
         try
             rmprocs(session.worker_id)
         catch e
-            @warn "Failed to cleanly kill worker" session=session.name worker_id=session.worker_id exception=(e, catch_backtrace())
+            @warn "Failed to cleanly kill worker, attempting interrupt" session=session.name worker_id=session.worker_id exception=(e, catch_backtrace())
+            try; interrupt(session.worker_id); catch; end
         end
     end
     session.worker_id = nothing
@@ -160,8 +191,7 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
                 value_str, output, error_str = remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
             catch e
                 if e isa Distributed.ProcessExitedException
-                    session.worker_id = nothing
-                    session.revise_loaded = false
+                    _handle_worker_crash!(session, e)
                     value_str = "nothing"
                     output = ""
                     error_str = "Worker process crashed. It will respawn on next eval. Error: $(sprint(showerror, e))"
@@ -200,6 +230,7 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
             if tag == :ok
                 value_str, output, error_str = payload
             elseif tag == :error
+                _handle_worker_crash!(session, payload)
                 value_str = "nothing"
                 output = ""
                 error_str = sprint(showerror, payload)
@@ -275,5 +306,10 @@ function get_worker_info(session::SessionState)
         )
     end
 
-    return remotecall_fetch(Core.eval, worker_id, Main, info_expr)
+    try
+        return remotecall_fetch(Core.eval, worker_id, Main, info_expr)
+    catch e
+        _handle_worker_crash!(session, e)
+        rethrow()
+    end
 end

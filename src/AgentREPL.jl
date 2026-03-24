@@ -33,7 +33,7 @@ claude mcp add julia-repl -- julia --project=/path/to/AgentREPL.jl /path/to/Agen
 
 - `eval` - Evaluate Julia code with persistent state
 - `reset` - Hard reset (kills worker, spawns fresh one, enables type redefinition)
-- `info` - Get session info (Julia version, project, variables, worker ID)
+- `info` - Get session info (Julia version, project, variables, Revise status, worker ID, session name)
 - `pkg` - Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
 - `activate` - Switch active project/environment
 - `log_viewer` - Control log viewer for visual output

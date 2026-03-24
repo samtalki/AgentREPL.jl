@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Revise.jl integration**: Auto-loaded on workers for hot-reloading code changes without restart
 - **`session` MCP tool**: Manage multiple concurrent Julia REPL sessions
 - **`revise` MCP tool**: Hot-reload file changes (revise, track, includet, status)
-- **Optional `session` parameter**: All existing tools now accept a session name to target specific sessions
+- **Optional `session` parameter**: All tools except `log_viewer` and `session` now accept a session name to target specific sessions
 - **PostToolUse hook**: Automatically calls `revise` after editing `.jl` files
 - **New skills**: julia-session, julia-revise, julia-develop, julia-language (deep Julia expertise)
 - Session isolation: each session has its own worker, variables, packages, and project environment
@@ -54,11 +54,11 @@ First public release of AgentREPL.jl.
 - Project activation with shared environment support (@v1.10, @myenv)
 
 ### Requirements
-- Julia 1.11+ (for JuliaSyntaxHighlighting stdlib)
+- Julia 1.12+ (for JuliaSyntaxHighlighting stdlib)
 - ModelContextProtocol.jl 0.4+
 
 ### Note
-Tmux bidirectional REPL mode is deprecated. Use distributed mode with log_viewer instead.
+Tmux bidirectional REPL mode is deprecated. Use distributed mode with log_viewer instead. (Removed in 0.6.0)
 
 [Unreleased]: https://github.com/samtalki/AgentREPL.jl/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/samtalki/AgentREPL.jl/compare/v0.5.0...v0.6.0

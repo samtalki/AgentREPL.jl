@@ -7,7 +7,7 @@ State for a named Julia REPL session. Each session has its own worker process,
 project environment, and Revise.jl tracking state.
 
 # Fields
-- `name::String`: Session name (e.g., "default", "analysis", "testing") — must not be empty, must not be mutated after construction
+- `name::String`: Session name (e.g., "default", "analysis", "testing") — must not be empty, immutable after construction
 - `worker_id::Union{Int, Nothing}`: Distributed.jl worker process ID
 - `project_path::Union{String, Nothing}`: Active project/environment path (persists across resets)
 - `revise_loaded::Bool`: Whether Revise.jl was successfully loaded on the worker
@@ -15,7 +15,7 @@ project environment, and Revise.jl tracking state.
 - `last_used::Float64`: Last time this session was used (from `time()`)
 """
 mutable struct SessionState
-    name::String
+    const name::String
     worker_id::Union{Int, Nothing}
     project_path::Union{String, Nothing}
     revise_loaded::Bool
