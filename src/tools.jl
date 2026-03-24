@@ -104,6 +104,9 @@ Use `revise(action="revise")` after editing .jl files to hot-reload changes with
                 catch
                     return TextContent(text = "Error: 'timeout' must be a number (got: $(repr(timeout_val)))")
                 end
+                if timeout !== nothing && timeout <= 0
+                    return TextContent(text = "Error: 'timeout' must be a positive number (got: $(repr(timeout_val)))")
+                end
                 max_output = try
                     Int(get(params, "max_output", 50_000))
                 catch
