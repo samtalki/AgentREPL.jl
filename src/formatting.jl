@@ -1,5 +1,20 @@
 # formatting.jl - Result formatting and stacktrace truncation
 
+const SPARKLINE_BLOCKS = ['▁','▂','▃','▄','▅','▆','▇','█']
+
+"""
+    sparkline(values::AbstractVector{<:Real}) -> String
+
+Render a sparkline using Unicode block characters (▁▂▃▄▅▆▇█).
+"""
+function sparkline(values::AbstractVector{<:Real})
+    isempty(values) && return ""
+    lo, hi = extrema(values)
+    span = hi - lo
+    span == 0 && return repeat("▄", length(values))
+    return String([SPARKLINE_BLOCKS[clamp(round(Int, (v - lo) / span * 7) + 1, 1, 8)] for v in values])
+end
+
 """
     truncate_output(text::String, max_chars::Int; use_ansi::Bool=false) -> String
 

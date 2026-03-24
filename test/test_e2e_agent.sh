@@ -97,6 +97,11 @@ run_test "revise-status" \
     "Use the Julia revise tool with action 'status' and tell me whether Revise.jl is loaded." \
     "Revise|revise|loaded|available"
 
+# Test 8: eval timing sparkline in info
+run_test "info-sparkline" \
+    "Use the Julia eval tool three times: eval 1+1, eval 2+2, eval 3+3. Then call the info tool. Show me the full info output including eval timings." \
+    "Eval Timings|timings|▁|▂|▃|▄|▅|▆|▇|█|median|max"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $SKIP skipped ==="
 

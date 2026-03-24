@@ -240,6 +240,18 @@ Returns:
                     join(lines, "\n")
                 end
 
+                timings_str = if isempty(session.eval_timings)
+                    ""
+                else
+                    n = length(session.eval_timings)
+                    sorted = sort(session.eval_timings)
+                    mid = div(n, 2)
+                    med = isodd(n) ? sorted[mid + 1] : (sorted[mid] + sorted[mid + 1]) / 2
+                    mx = sorted[end]
+                    spark = sparkline(session.eval_timings)
+                    "Eval Timings ($n evals): $spark  median $(format_elapsed(med)), max $(format_elapsed(mx))\n"
+                end
+
                 msg = """
 Session: $(session.name)$(session.name == SESSIONS.current ? " (current)" : "")
 Julia Version: $(info.version)
@@ -249,7 +261,7 @@ User Variables:
 $vars_str
 Loaded Modules: $(info.modules)
 Worker ID: $(session.worker_id)
-"""
+$(timings_str)"""
                 TextContent(text = msg)
             catch e
                 e isa InterruptException && rethrow()

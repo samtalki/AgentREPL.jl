@@ -9,6 +9,7 @@ Clear worker-related fields on a session. Centralizes the paired reset of
 function _clear_worker_state!(session::SessionState)
     session.worker_id = nothing
     session.revise_loaded = false
+    empty!(session.eval_timings)
 end
 
 """
@@ -270,6 +271,9 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
             end
         end
     end
+
+    push!(session.eval_timings, elapsed)
+    length(session.eval_timings) > MAX_EVAL_TIMINGS && popfirst!(session.eval_timings)
 
     return (value_str, output, error_str, elapsed)
 end
