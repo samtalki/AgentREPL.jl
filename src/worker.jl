@@ -1,118 +1,214 @@
 # worker.jl - Distributed worker lifecycle management
 
 """
-    ensure_worker!() -> Int
+    _clear_worker_state!(session::SessionState)
 
-Ensure a worker process exists, creating one if needed. Returns the worker ID.
+Clear worker-related fields on a session. Centralizes the paired reset of
+`worker_id` and `revise_loaded` so every call site stays consistent.
 """
-function ensure_worker!()
-    if WORKER.worker_id === nothing || !(WORKER.worker_id in workers())
-        # Get the current project directory so worker inherits the environment
-        project_dir = dirname(Pkg.project().path)
+function _clear_worker_state!(session::SessionState)
+    session.worker_id = nothing
+    session.revise_loaded = false
+end
 
-        # Spawn a new worker with the same project environment
-        new_workers = addprocs(1; exeflags=`--project=$project_dir`)
-        WORKER.worker_id = first(new_workers)
+"""
+    _handle_worker_crash!(session::SessionState, e)
 
-        # Load Pkg on the worker using Core.eval to avoid closure serialization issues
-        remotecall_fetch(Core.eval, WORKER.worker_id, Main, :(using Pkg))
-
-        # Activate project if one was set
-        if WORKER.project_path !== nothing
-            try
-                path = WORKER.project_path
-                remotecall_fetch(Core.eval, WORKER.worker_id, Main, :(Pkg.activate($path)))
-            catch e
-                @warn "Failed to activate project on worker" project=WORKER.project_path error=e
-                WORKER.project_path = nothing  # Clear invalid path to prevent repeated failures
-            end
+Reset session worker state if `e` indicates a dead worker.
+Handles both `ProcessExitedException` and `RemoteException` (when the worker
+is no longer in `workers()`).
+"""
+function _handle_worker_crash!(session::SessionState, e)
+    if e isa Distributed.ProcessExitedException
+        _clear_worker_state!(session)
+    elseif e isa Distributed.RemoteException
+        if session.worker_id !== nothing && !(session.worker_id in workers())
+            _clear_worker_state!(session)
         end
     end
-    return WORKER.worker_id
 end
 
 """
-    kill_worker!()
+    ensure_worker!(session::SessionState; _retry_without_revise::Bool=false) -> Int
 
-Kill the current worker process if one exists.
+Ensure a worker process exists for the given session, creating one if needed.
+Returns the worker ID. Also attempts to load Revise.jl on the worker.
+
+The `_retry_without_revise` flag is internal — it prevents unbounded recursion
+when Revise.jl consistently crashes the worker process.
 """
-function kill_worker!()
-    if WORKER.worker_id !== nothing && WORKER.worker_id in workers()
-        rmprocs(WORKER.worker_id)
+function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false)
+    if session.worker_id === nothing || !(session.worker_id in workers())
+        project_dir = try
+            dirname(Pkg.project().path)
+        catch e
+            e isa InterruptException && rethrow()
+            e isa OutOfMemoryError && rethrow()
+            error("Cannot determine project directory for session '$(session.name)'. Ensure Julia is started with --project=<path>.")
+        end
+        new_workers = try
+            addprocs(1; exeflags=`--project=$project_dir`)
+        catch e
+            error("Failed to spawn worker for session '$(session.name)': $(sprint(showerror, e))")
+        end
+        session.worker_id = first(new_workers)
+
+        # Core.eval avoids closure serialization issues with remotecall
+        try
+            remotecall_fetch(Core.eval, session.worker_id, Main, :(using Pkg))
+        catch e
+            @warn "Failed to load Pkg on worker, killing half-initialized worker" session=session.name exception=(e, catch_backtrace())
+            _clear_worker_state!(session)
+            try; rmprocs(session.worker_id); catch; end
+            rethrow()
+        end
+
+        if !_retry_without_revise
+            try
+                remotecall_fetch(Core.eval, session.worker_id, Main, :(using Revise))
+                session.revise_loaded = true
+            catch e
+                session.revise_loaded = false
+                if e isa Distributed.RemoteException || e isa Distributed.ProcessExitedException
+                    @warn "Worker may have crashed while loading Revise.jl" session=session.name exception=(e, catch_backtrace())
+                else
+                    @warn "Unexpected error loading Revise.jl on worker" session=session.name exception=(e, catch_backtrace())
+                end
+            end
+
+            # If Revise loading crashed the worker, respawn once without Revise
+            if session.worker_id !== nothing && !(session.worker_id in workers())
+                _clear_worker_state!(session)
+                return ensure_worker!(session; _retry_without_revise=true)
+            end
+        end
+
+        if session.project_path !== nothing
+            try
+                path = session.project_path
+                remotecall_fetch(Core.eval, session.worker_id, Main, :(Pkg.activate($path)))
+            catch e
+                # Intentionally preserve project_path so a transient activation failure
+                # (e.g., missing Manifest.toml) can succeed on next worker spawn after
+                # the user runs pkg(action="instantiate")
+                @warn "Failed to activate project on worker — will retry on next worker spawn" project=session.project_path error=e
+            end
+        end
+
+        session.last_used = time()
     end
-    WORKER.worker_id = nothing
+    return session.worker_id
 end
 
 """
-    reset_worker!()
+    kill_worker!(session::SessionState)
 
-Kill the current worker and spawn a fresh one. Returns the new worker ID.
+Kill the worker process for the given session.
 """
-function reset_worker!()
-    kill_worker!()
-    return ensure_worker!()
+function kill_worker!(session::SessionState)
+    if session.worker_id !== nothing && session.worker_id in workers()
+        try
+            rmprocs(session.worker_id)
+        catch e
+            @warn "Failed to cleanly kill worker, attempting interrupt" session=session.name worker_id=session.worker_id exception=(e, catch_backtrace())
+            try; interrupt(session.worker_id); catch; end
+        end
+    end
+    _clear_worker_state!(session)
 end
 
 """
-    capture_eval_on_worker(code::String) -> (value_str, output, error_str)
+    reset_worker!(session::SessionState) -> Int
+
+Kill the session's worker and spawn a fresh one. Returns the new worker ID.
+"""
+function reset_worker!(session::SessionState)
+    kill_worker!(session)
+    return ensure_worker!(session)
+end
+
+"""
+    _with_output_capture(body_expr::Expr) -> Expr
+
+Generate a quote block that wraps `body_expr` with stdout/stderr capture.
+The returned expression evaluates to `(body_result, stdout_string, stderr_string)`.
+Used at quote construction time — spliced into remote eval expressions via \$().
+"""
+function _with_output_capture(body_expr::Expr)
+    quote
+        let
+            _woc_old_stdout = stdout
+            _woc_old_stderr = stderr
+            _woc_rd_out, _woc_wr_out = redirect_stdout()
+            _woc_rd_err, _woc_wr_err = redirect_stderr()
+            _woc_body_result = try
+                $body_expr
+            finally
+                redirect_stdout(_woc_old_stdout)
+                redirect_stderr(_woc_old_stderr)
+                close(_woc_wr_out)
+                close(_woc_wr_err)
+            end
+            _woc_stdout = try; String(read(_woc_rd_out)); catch; "[output capture failed]"; end
+            _woc_stderr = try; String(read(_woc_rd_err)); catch; "[stderr capture failed]"; end
+            try; close(_woc_rd_out); catch; end
+            try; close(_woc_rd_err); catch; end
+            (_woc_body_result, _woc_stdout, _woc_stderr)
+        end
+    end
+end
+
+"""
+    capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing, session_name::Union{String,Nothing}=nothing) -> (value_str, output, error_str, elapsed)
 
 Evaluate Julia code on the worker process, capturing both return value and printed output.
 Uses Core.eval with expressions to avoid closure serialization issues.
+
+Returns a 4-tuple: (value_str, output, error_str, elapsed_seconds).
+
+If `timeout` is set (in seconds), the worker is killed after the timeout and a TimeoutError is returned.
+If `session_name` is given, evaluates on that session's worker; otherwise uses the current session.
 """
-function capture_eval_on_worker(code::String)
-    worker_id = ensure_worker!()
+function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing, session_name::Union{String,Nothing}=nothing)
+    session = resolve_session(session_name)
+    worker_id = ensure_worker!(session)
+    session.last_used = time()
 
-    # Define the evaluation function on the worker if not already defined
-    # This avoids closure serialization issues by sending code as data
+    # Pass color preference to worker so repr uses ANSI for color-aware types (UnicodePlots, etc.)
+    use_color = is_highlighting_enabled() && get_output_format() == :ansi
+
     eval_expr = quote
-        let code_str = $code
-            value = nothing
-            err = nothing
-            bt = nothing
-
-            old_stdout = stdout
-            old_stderr = stderr
-
-            rd_out, wr_out = redirect_stdout()
-            rd_err, wr_err = redirect_stderr()
-
-            try
-                value = include_string(Main, code_str, "julia_eval")
-            catch e
-                err = e
-                bt = catch_backtrace()
-            finally
-                redirect_stdout(old_stdout)
-                redirect_stderr(old_stderr)
-                close(wr_out)
-                close(wr_err)
-            end
-
-            stdout_content = ""
-            stderr_content = ""
-            try
-                stdout_content = String(read(rd_out))
-                stderr_content = String(read(rd_err))
-            finally
-                # Wrap each close in try-catch to prevent masking errors
-                try; close(rd_out); catch; end
-                try; close(rd_err); catch; end
-            end
+        let code_str = $code, _use_color = $use_color
+            (_eval_value, _eval_err, _eval_bt), stdout_content, stderr_content = $(_with_output_capture(quote
+                _eval_value = nothing
+                _eval_err = nothing
+                _eval_bt = nothing
+                try
+                    _eval_value = include_string(Main, code_str, "julia_eval")
+                catch e
+                    _eval_err = e
+                    _eval_bt = catch_backtrace()
+                end
+                (_eval_value, _eval_err, _eval_bt)
+            end))
 
             combined_output = stdout_content
             if !isempty(stderr_content)
                 combined_output *= "\n[stderr]\n" * stderr_content
             end
 
-            error_str = err === nothing ? nothing : sprint(showerror, err, bt)
+            error_str = _eval_err === nothing ? nothing : sprint(showerror, _eval_err, _eval_bt)
             value_str = try
-                repr(value)
+                if _use_color
+                    sprint(io -> show(IOContext(io, :color => true, :compact => true, :limit => true), MIME"text/plain"(), _eval_value))
+                else
+                    repr(_eval_value)
+                end
             catch repr_err
                 try
-                    string(value)
+                    string(_eval_value)
                 catch str_err
-                    # Final fallback for types that can't be stringified (e.g., JSON3.Object)
-                    "<$(typeof(value))>"
+                    "<$(typeof(_eval_value))>"
                 end
             end
 
@@ -120,26 +216,105 @@ function capture_eval_on_worker(code::String)
         end
     end
 
-    return remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
+    local value_str, output, error_str
+
+    elapsed = @elapsed begin
+        if timeout === nothing
+            # No timeout: blocking remotecall_fetch with crash protection
+            try
+                value_str, output, error_str = remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
+            catch e
+                if e isa Distributed.ProcessExitedException
+                    _handle_worker_crash!(session, e)
+                    value_str = "nothing"
+                    output = ""
+                    error_str = "Worker process crashed. It will respawn on next eval. Error: $(sprint(showerror, e))"
+                else
+                    rethrow()
+                end
+            end
+        else
+            # With timeout: race remotecall against a cancellable Timer
+            result_channel = Channel{Any}(1)
+            future = remotecall(Core.eval, worker_id, Main, eval_expr)
+
+            # Timer fires after timeout. Race safety comes from the Channel(1) —
+            # only the first put! succeeds. close(timer) is best-effort cleanup.
+            timer = Timer(timeout) do _
+                try; put!(result_channel, (:timeout, nothing)); catch; end
+            end
+
+            @async begin
+                try
+                    result = fetch(future)
+                    put!(result_channel, (:ok, result))
+                catch e
+                    try
+                        put!(result_channel, (:error, e))
+                    catch put_err
+                        @warn "Failed to report async eval error (channel may be closed)" exception=(e, catch_backtrace())
+                    end
+                end
+            end
+
+            tag, payload = take!(result_channel)
+            close(timer)
+            close(result_channel)
+
+            if tag == :ok
+                value_str, output, error_str = payload
+            elseif tag == :error
+                _handle_worker_crash!(session, payload)
+                value_str = "nothing"
+                output = ""
+                error_str = sprint(showerror, payload)
+            else  # :timeout
+                kill_worker!(session)
+                value_str = "nothing"
+                output = ""
+                error_str = "TimeoutError: evaluation exceeded $(timeout)s timeout. Worker was killed and will respawn on next eval."
+            end
+        end
+    end
+
+    return (value_str, output, error_str, elapsed)
 end
 
 """
-    get_worker_info() -> NamedTuple
+    get_worker_info(session::SessionState) -> NamedTuple
 
-Get information about the current worker session.
+Get information about the given session's worker.
 """
-function get_worker_info()
-    worker_id = ensure_worker!()
+function get_worker_info(session::SessionState)
+    worker_id = ensure_worker!(session)
 
     info_expr = quote
-        # Get user-defined symbols
+        # Get user-defined symbols with type and size info
         all_names = names(Main; all=true)
-        protected = Set([:Base, :Core, :Main, :ans, :include, :eval, :Pkg])
-        user_vars = Symbol[]
+        protected = Set([:Base, :Core, :Main, :ans, :include, :eval, :Pkg, :Revise])
+        user_vars = NamedTuple{(:name, :type, :size), Tuple{Symbol, String, String}}[]
         for name in all_names
             name_str = string(name)
             if !startswith(name_str, "#") && !startswith(name_str, "_") && !(name in protected)
-                push!(user_vars, name)
+                val = try; Core.eval(Main, name); catch; nothing; end
+                type_str = try; string(typeof(val)); catch; "?"; end
+                size_str = try
+                    if applicable(size, val) && !(val isa AbstractString)
+                        s = size(val)
+                        if !isempty(s)
+                            length(s) > 1 ? string(s) : "length=$(length(val))"
+                        else
+                            ""
+                        end
+                    elseif applicable(length, val)
+                        "length=$(length(val))"
+                    else
+                        ""
+                    end
+                catch
+                    ""
+                end
+                push!(user_vars, (name=name, type=type_str, size=size_str))
             end
         end
 
@@ -165,5 +340,10 @@ function get_worker_info()
         )
     end
 
-    return remotecall_fetch(Core.eval, worker_id, Main, info_expr)
+    try
+        return remotecall_fetch(Core.eval, worker_id, Main, info_expr)
+    catch e
+        _handle_worker_crash!(session, e)
+        rethrow()
+    end
 end

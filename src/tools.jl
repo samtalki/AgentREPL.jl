@@ -1,6 +1,38 @@
 # tools.jl - MCP tool definitions
 
 """
+    _validate_action(params, valid_actions::Vector{String}) -> String
+
+Validate and extract an action parameter. Returns the lowercased action string.
+Throws `ArgumentError` if validation fails.
+"""
+function _validate_action(params, valid_actions::Vector{String})
+    action = get(params, "action", nothing)
+    if action === nothing || !isa(action, AbstractString)
+        throw(ArgumentError("'action' parameter is required and must be a string"))
+    end
+    action_lower = lowercase(strip(action))
+    if action_lower ∉ valid_actions
+        throw(ArgumentError("action must be one of: $(join(valid_actions, ", ")) (got: '$action')"))
+    end
+    return action_lower
+end
+
+"""
+    _require_string_param(params, name::String, action::String) -> String
+
+Extract and validate a required string parameter. Returns the stripped string.
+Throws `ArgumentError` if the parameter is missing or not a string.
+"""
+function _require_string_param(params, name::String, action::String)
+    val = get(params, name, nothing)
+    if val === nothing || !isa(val, AbstractString)
+        throw(ArgumentError("'$name' parameter is required for action '$action'"))
+    end
+    return String(strip(val))
+end
+
+"""
     create_eval_tool() -> MCPTool
 
 Create the eval tool for evaluating Julia code.
@@ -16,8 +48,10 @@ Features:
 - Packages loaded once stay loaded (no TTFX penalty)
 - Both return value and printed output are captured
 - Errors are caught and reported with backtraces
+- Execution time is shown for every evaluation
 
 Use this for iterative development, testing, and exploration.
+Use `revise(action="revise")` after editing .jl files to hot-reload changes without losing session state.
 """,
         parameters = [
             ToolParameter(
@@ -25,29 +59,77 @@ Use this for iterative development, testing, and exploration.
                 type = "string",
                 description = "Julia code to evaluate. Can be single expressions or multi-line code blocks.",
                 required = true
+            ),
+            ToolParameter(
+                name = "timeout",
+                type = "number",
+                description = "Maximum execution time in seconds. If exceeded, the worker is killed and respawns on next eval. Use for potentially long-running or infinite code.",
+                required = false
+            ),
+            ToolParameter(
+                name = "max_output",
+                type = "integer",
+                description = "Maximum characters for output/value before truncation (default: 50000). Prevents context window overflow from large outputs.",
+                required = false
+            ),
+            ToolParameter(
+                name = "max_stackframes",
+                type = "integer",
+                description = "Maximum stacktrace frames to show in errors (default: 5). Increase for deep macro errors, decrease for simple errors.",
+                required = false
+            ),
+            ToolParameter(
+                name = "session",
+                type = "string",
+                description = "Session name to evaluate in. If omitted, uses the current session.",
+                required = false
             )
         ],
         handler = params -> begin
-            code = get(params, "code", nothing)
+            try
+                code = get(params, "code", nothing)
 
-            if code === nothing || !isa(code, AbstractString)
-                return TextContent(text = "Error: 'code' parameter is required and must be a string")
+                if code === nothing || !isa(code, AbstractString)
+                    return TextContent(text = "Error: 'code' parameter is required and must be a string")
+                end
+
+                if isempty(strip(code))
+                    return TextContent(text = "Error: 'code' parameter cannot be empty")
+                end
+
+                # Extract optional parameters with validation
+                timeout_val = get(params, "timeout", nothing)
+                timeout = try
+                    timeout_val === nothing ? nothing : Float64(timeout_val)
+                catch
+                    return TextContent(text = "Error: 'timeout' must be a number (got: $(repr(timeout_val)))")
+                end
+                if timeout !== nothing && timeout <= 0
+                    return TextContent(text = "Error: 'timeout' must be a positive number (got: $(repr(timeout_val)))")
+                end
+                max_output = try
+                    Int(get(params, "max_output", 50_000))
+                catch
+                    return TextContent(text = "Error: 'max_output' must be an integer")
+                end
+                max_stackframes = try
+                    Int(get(params, "max_stackframes", 5))
+                catch
+                    return TextContent(text = "Error: 'max_stackframes' must be an integer")
+                end
+                session_name = get(params, "session", nothing)
+
+                value_str, output, error_str, elapsed = capture_eval_on_worker(code; timeout=timeout, session_name=session_name)
+                log_interaction(code, value_str, output, error_str; elapsed=elapsed)
+
+                result = format_result(code, value_str, output, error_str;
+                                        elapsed=elapsed, max_output=max_output, max_stackframes=max_stackframes)
+                TextContent(text = result)
+            catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
+                TextContent(text = "Internal error in eval tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
             end
-
-            if isempty(strip(code))
-                return TextContent(text = "Error: 'code' parameter cannot be empty")
-            end
-
-            # Use appropriate backend based on mode
-            if REPL_MODE[] == :tmux
-                value_str, output, error_str = eval_in_tmux(code)
-            else
-                value_str, output, error_str = capture_eval_on_worker(code)
-                log_interaction(code, value_str, output, error_str)
-            end
-
-            result = format_result(code, value_str, output, error_str)
-            TextContent(text = result)
         end
     )
 end
@@ -68,28 +150,26 @@ This provides a true reset:
 - All loaded packages are unloaded
 - Type definitions are cleared (unlike soft reset)
 - The worker starts completely fresh
+- Revise.jl is reloaded automatically
 
-Use this when you need a clean slate or to redefine types/structs.
+Use this when you need to redefine struct layouts (Julia < 1.12) or need a clean slate.
+Prefer `revise(action="revise")` for function/method changes — it preserves session state.
 """,
-        parameters = [],
-        handler = _ -> begin
-            if REPL_MODE[] == :tmux
-                kill_tmux_repl!()
-                ensure_tmux_repl!()
+        parameters = [
+            ToolParameter(
+                name = "session",
+                type = "string",
+                description = "Session name to reset. If omitted, resets the current session.",
+                required = false
+            )
+        ],
+        handler = params -> begin
+            try
+                session_name = get(params, "session", nothing)
+                session = resolve_session(session_name)
 
-                msg = """
-Session reset complete (tmux mode).
-- Julia REPL session restarted
-- All variables, functions, and types cleared
-- Packages will need to be reloaded with `using`
-"""
-                if TMUX_REPL.project_path !== nothing
-                    msg *= "- Project: $(TMUX_REPL.project_path)\n"
-                end
-                TextContent(text = msg)
-            else
-                old_id = WORKER.worker_id
-                new_id = reset_worker!()
+                old_id = session.worker_id
+                new_id = reset_worker!(session)
 
                 msg = """
 Session reset complete.
@@ -97,12 +177,17 @@ Session reset complete.
 - New worker (ID: $new_id) spawned
 - All variables, functions, and types cleared
 - Packages will need to be reloaded with `using`
+- Revise.jl: $(session.revise_loaded ? "loaded" : "not available")
 """
-                if WORKER.project_path !== nothing
-                    msg *= "- Project re-activated: $(WORKER.project_path)\n"
+                if session.project_path !== nothing
+                    msg *= "- Project re-activated: $(session.project_path)\n"
                 end
 
                 TextContent(text = msg)
+            catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
+                TextContent(text = "Internal error in reset tool: $(sprint(showerror, e))")
             end
         end
     )
@@ -125,21 +210,52 @@ Returns:
 - List of user-defined variables
 - Number of loaded modules
 - Worker process ID
+- Session name and Revise.jl status
 """,
-        parameters = [],
-        handler = _ -> begin
-            info = get_worker_info()
+        parameters = [
+            ToolParameter(
+                name = "session",
+                type = "string",
+                description = "Session name to query. If omitted, uses the current session.",
+                required = false
+            )
+        ],
+        handler = params -> begin
+            try
+                session_name = get(params, "session", nothing)
+                session = resolve_session(session_name)
+                info = get_worker_info(session)
 
-            vars_str = isempty(info.variables) ? "(none)" : join(info.variables, ", ")
+                vars_str = if isempty(info.variables)
+                    "(none)"
+                else
+                    lines = String[]
+                    for v in info.variables
+                        entry = "  $(v.name)::$(v.type)"
+                        if !isempty(v.size)
+                            entry *= " $(v.size)"
+                        end
+                        push!(lines, entry)
+                    end
+                    join(lines, "\n")
+                end
 
-            msg = """
+                msg = """
+Session: $(session.name)$(session.name == SESSIONS.current ? " (current)" : "")
 Julia Version: $(info.version)
 Active Project: $(info.project)
-User Variables: $vars_str
+Revise.jl: $(session.revise_loaded ? "loaded" : "not available")
+User Variables:
+$vars_str
 Loaded Modules: $(info.modules)
-Worker ID: $(WORKER.worker_id)
+Worker ID: $(session.worker_id)
 """
-            TextContent(text = msg)
+                TextContent(text = msg)
+            catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
+                TextContent(text = "Internal error in info tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
+            end
         end
     )
 end
@@ -188,77 +304,85 @@ Examples:
                 type = "string",
                 description = "Space or comma-separated package names or paths. Required for add, rm, develop, free. Optional for update, test.",
                 required = false
+            ),
+            ToolParameter(
+                name = "session",
+                type = "string",
+                description = "Session name. If omitted, uses the current session.",
+                required = false
             )
         ],
         handler = params -> begin
-            action = get(params, "action", nothing)
-            if action === nothing || !isa(action, AbstractString)
-                return TextContent(text = "Error: 'action' parameter is required and must be a string")
-            end
+            try
+                action_lower = _validate_action(params, ["add", "rm", "status", "update", "instantiate", "resolve", "test", "develop", "free"])
 
-            action_lower = lowercase(strip(action))
-            valid_actions = ["add", "rm", "status", "update", "instantiate", "resolve", "test", "develop", "free"]
-            if action_lower ∉ valid_actions
-                return TextContent(text = "Error: action must be one of: $(join(valid_actions, ", ")) (got: '$action')")
-            end
+                packages_str = get(params, "packages", nothing)
+                if packages_str === nothing
+                    packages_str = ""
+                end
 
-            packages_str = get(params, "packages", "")
-            if packages_str === nothing
-                packages_str = ""
-            end
-
-            pkg_list = String[]
-            if !isempty(strip(packages_str))
-                for part in split(packages_str, r"[,\s]+")
-                    cleaned = strip(part)
-                    if !isempty(cleaned)
-                        push!(pkg_list, cleaned)
+                pkg_list = String[]
+                if !isempty(strip(packages_str))
+                    for part in split(packages_str, r"[,\s]+")
+                        cleaned = strip(part)
+                        if !isempty(cleaned)
+                            push!(pkg_list, cleaned)
+                        end
                     end
                 end
-            end
 
-            # Actions that require packages
-            if action_lower in ["add", "rm", "develop", "free"] && isempty(pkg_list)
-                return TextContent(text = "Error: 'packages' parameter is required for action '$action_lower'")
-            end
+                # Actions that require packages
+                if action_lower in ["add", "rm", "develop", "free"] && isempty(pkg_list)
+                    return TextContent(text = "Error: 'packages' parameter is required for action '$action_lower'")
+                end
 
-            result = run_pkg_action_on_worker(action_lower, pkg_list)
+                session_name = get(params, "session", nothing)
+                result = run_pkg_action_on_worker(action_lower, pkg_list; session_name=session_name)
 
-            if result.error !== nothing
-                return TextContent(text = "Error during Pkg.$action_lower:\n$(result.error)")
-            end
+                if result.error !== nothing
+                    return TextContent(text = "Error during Pkg.$action_lower:\n$(result.error)")
+                end
 
-            action_summary = if action_lower == "add"
-                "Added $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
-            elseif action_lower == "rm"
-                "Removed $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
-            elseif action_lower == "status"
-                "Package Status:"
-            elseif action_lower == "update"
-                isempty(pkg_list) ? "Updated all packages" : "Updated $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
-            elseif action_lower == "instantiate"
-                "Instantiated environment (downloaded and precompiled dependencies)"
-            elseif action_lower == "resolve"
-                "Resolved dependencies (updated Manifest.toml)"
-            elseif action_lower == "test"
-                isempty(pkg_list) ? "Ran tests for current project" : "Ran tests for: $(join(pkg_list, ", "))"
-            elseif action_lower == "develop"
-                "Put $(length(pkg_list)) package(s) in development mode: $(join(pkg_list, ", "))"
-            elseif action_lower == "free"
-                "Freed $(length(pkg_list)) package(s) from development mode: $(join(pkg_list, ", "))"
-            else
-                "Completed action: $action_lower"
-            end
+                action_summary = if action_lower == "add"
+                    "Added $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                elseif action_lower == "rm"
+                    "Removed $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                elseif action_lower == "status"
+                    "Package Status:"
+                elseif action_lower == "update"
+                    isempty(pkg_list) ? "Updated all packages" : "Updated $(length(pkg_list)) package(s): $(join(pkg_list, ", "))"
+                elseif action_lower == "instantiate"
+                    "Instantiated environment (downloaded and precompiled dependencies)"
+                elseif action_lower == "resolve"
+                    "Resolved dependencies (updated Manifest.toml)"
+                elseif action_lower == "test"
+                    isempty(pkg_list) ? "Ran tests for current project" : "Ran tests for: $(join(pkg_list, ", "))"
+                elseif action_lower == "develop"
+                    "Put $(length(pkg_list)) package(s) in development mode: $(join(pkg_list, ", "))"
+                elseif action_lower == "free"
+                    "Freed $(length(pkg_list)) package(s) from development mode: $(join(pkg_list, ", "))"
+                else
+                    "Completed action: $action_lower"
+                end
 
-            result_parts = [action_summary]
-            if !isempty(strip(result.stdout))
-                push!(result_parts, "\nOutput:\n$(result.stdout)")
-            end
-            if !isempty(strip(result.stderr))
-                push!(result_parts, "\n[stderr]\n$(result.stderr)")
-            end
+                result_parts = [action_summary]
+                if !isempty(strip(result.stdout))
+                    push!(result_parts, "\nOutput:\n$(result.stdout)")
+                end
+                if !isempty(strip(result.stderr))
+                    push!(result_parts, "\n[stderr]\n$(result.stderr)")
+                end
 
-            TextContent(text = join(result_parts, ""))
+                TextContent(text = join(result_parts, ""))
+            catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
+                if e isa ArgumentError
+                    TextContent(text = "Error: $(e.msg)")
+                else
+                    TextContent(text = "Internal error in pkg tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
+                end
+            end
         end
     )
 end
@@ -292,20 +416,33 @@ After activation, use `pkg(action="instantiate")` to install dependencies.
                 type = "string",
                 description = "Path to project directory, '.' for current directory, or named environment like '@v1.10'",
                 required = true
+            ),
+            ToolParameter(
+                name = "session",
+                type = "string",
+                description = "Session name. If omitted, uses the current session.",
+                required = false
             )
         ],
         handler = params -> begin
-            path = get(params, "path", nothing)
-            if path === nothing || !isa(path, AbstractString)
-                return TextContent(text = "Error: 'path' parameter is required and must be a string")
-            end
+            try
+                path = get(params, "path", nothing)
+                if path === nothing || !isa(path, AbstractString)
+                    return TextContent(text = "Error: 'path' parameter is required and must be a string")
+                end
 
-            result = activate_project_on_worker!(path)
+                session_name = get(params, "session", nothing)
+                result = activate_project_on_worker!(path; session_name=session_name)
 
-            if result.success
-                TextContent(text = "Activated project: $(result.project)\n\nUse `pkg(action=\"instantiate\")` to install dependencies if needed.")
-            else
-                TextContent(text = "Error activating project: $(result.error)")
+                if result.success
+                    TextContent(text = "Activated project: $(result.project)\n\nUse `pkg(action=\"instantiate\")` to install dependencies if needed.")
+                else
+                    TextContent(text = "Error activating project: $(result.error)")
+                end
+            catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
+                TextContent(text = "Internal error in activate tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
             end
         end
     )
@@ -340,119 +477,250 @@ The log file is written to ~/.julia/logs/repl.log by default.
             )
         ],
         handler = params -> begin
-            mode_str = get(params, "mode", "auto")
-            if mode_str == "off"
-                close_log_viewer!()
-                return TextContent(text = "Log viewer disabled.")
-            end
+            try
+                mode_str = get(params, "mode", "auto")
+                if mode_str == "off"
+                    close_log_viewer!()
+                    return TextContent(text = "Log viewer disabled.")
+                end
 
-            mode = Symbol(mode_str)
-            if mode ∉ [:auto, :tmux, :file]
-                return TextContent(text = "Error: mode must be 'auto', 'tmux', 'file', or 'off'")
-            end
+                mode = Symbol(mode_str)
+                if mode ∉ [:auto, :tmux, :file]
+                    return TextContent(text = "Error: mode must be 'auto', 'tmux', 'file', or 'off'")
+                end
 
-            path = setup_log_viewer!(; mode=mode)
+                path = setup_log_viewer!(; mode=mode)
 
-            if LOG_VIEWER.mode == :tmux
-                TextContent(text = "Log viewer enabled (tmux).\nLog file: $path\nAttach with: tmux attach -t julia-repl")
-            elseif LOG_VIEWER.mode == :file
-                TextContent(text = "Log viewer enabled.\nLog file: $path\nA terminal window should have opened. If not, run: tail -f $path")
-            else
-                TextContent(text = "Log viewer enabled.\nLog file: $path\nRun in another terminal: tail -f $path")
+                if LOG_VIEWER.mode == :tmux
+                    TextContent(text = "Log viewer enabled (tmux).\nLog file: $path\nAttach with: tmux attach -t julia-repl")
+                elseif LOG_VIEWER.mode == :file
+                    TextContent(text = "Log viewer enabled.\nLog file: $path\nA terminal window should have opened. If not, run: tail -f $path")
+                else
+                    TextContent(text = "Log viewer enabled.\nLog file: $path\nRun in another terminal: tail -f $path")
+                end
+            catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
+                TextContent(text = "Internal error in log_viewer tool: $(sprint(showerror, e))")
             end
         end
     )
 end
 
 """
-    create_mode_tool() -> MCPTool
+    create_session_tool() -> MCPTool
 
-Create the mode tool for switching REPL modes.
+Create the session tool for managing multiple Julia REPL sessions.
 """
-function create_mode_tool()
+function create_session_tool()
     MCPTool(
-        name = "mode",
+        name = "session",
         description = """
-Switch between distributed worker and tmux REPL modes at runtime.
+Manage multiple Julia REPL sessions.
 
-Modes:
-- "distributed": Uses Distributed.jl worker subprocess (default, headless)
-- "tmux": Uses tmux session with visible terminal for bidirectional REPL
+Each session has its own worker process with isolated state (variables, packages, project).
+Use multiple sessions for parallel workflows (e.g., one for development, one for testing).
 
-Both modes can coexist - switching does not clean up the inactive mode.
-When switching to tmux, a terminal window will auto-open if not already visible.
+Actions:
+- create: Create a new named session (worker spawns lazily on first eval)
+- switch: Switch the active session
+- list: Show all sessions with status
+- destroy: Kill a session's worker and remove it
 
-Use `mode(mode="tmux")` to see Julia output in a live terminal that you can also type in directly.
+Examples:
+- session(action="create", name="analysis")
+- session(action="switch", name="analysis")
+- session(action="list")
+- session(action="destroy", name="analysis")
 """,
         parameters = [
             ToolParameter(
-                name = "mode",
+                name = "action",
                 type = "string",
-                description = "REPL mode: 'distributed' or 'tmux'",
+                description = "Session action: create, switch, list, or destroy",
                 required = true
+            ),
+            ToolParameter(
+                name = "name",
+                type = "string",
+                description = "Session name. Required for create, switch, destroy. Not used for list.",
+                required = false
             )
         ],
         handler = params -> begin
-            mode_str = get(params, "mode", nothing)
-            if mode_str === nothing || !isa(mode_str, AbstractString)
-                return TextContent(text = "Error: 'mode' parameter is required and must be a string")
-            end
+            try
+                action_lower = _validate_action(params, ["create", "switch", "list", "destroy"])
 
-            mode_sym = Symbol(lowercase(strip(mode_str)))
-            if mode_sym ∉ [:distributed, :tmux]
-                return TextContent(text = "Error: mode must be 'distributed' or 'tmux' (got: '$mode_str')")
-            end
-
-            # Check if already in requested mode
-            if REPL_MODE[] == mode_sym
-                return TextContent(text = "Already in $mode_sym mode.")
-            end
-
-            # Handle tmux mode with deprecation check
-            if mode_sym == :tmux
-                if !TMUX_ENABLED[]
-                    return TextContent(text = """
-Error: Tmux mode is deprecated and disabled by default.
-
-Tmux mode has unfixable issues with marker pollution in the terminal.
-Use distributed mode with log viewer instead:
-- Set JULIA_REPL_VIEWER=auto for visual output
-- Or manually: tail -f ~/.julia/logs/repl.log
-
-To force-enable tmux (not recommended):
-Set JULIA_REPL_ENABLE_TMUX=true environment variable.
-""")
+                if action_lower in ["create", "switch", "destroy"]
+                    name = _require_string_param(params, "name", action_lower)
                 end
 
-                if !ensure_tmux_repl!(; open_terminal=true)
-                    return TextContent(text = "Error: tmux mode unavailable (tmux not installed). Install with: sudo dnf install tmux")
+                if action_lower == "create"
+                    session = create_session!(name)
+                    TextContent(text = "Session '$(session.name)' created and set as current.\nWorker will spawn on first eval.")
+
+                elseif action_lower == "switch"
+                    session = switch_session!(name)
+                    msg = "Switched to session '$(session.name)'.\n"
+                    msg *= "Worker ID: $(something(session.worker_id, "not yet spawned"))\n"
+                    msg *= "Project: $(something(session.project_path, "default"))\n"
+                    msg *= "Revise.jl: $(session.revise_loaded ? "loaded" : "not loaded")"
+                    TextContent(text = msg)
+
+                elseif action_lower == "list"
+                    sessions = list_sessions()
+                    if isempty(sessions)
+                        return TextContent(text = "No sessions. Create one with session(action=\"create\", name=\"myname\") or just call eval (auto-creates 'default').")
+                    end
+
+                    lines = String["Sessions:"]
+                    for s in sessions
+                        marker = s.is_current ? " *" : "  "
+                        worker = s.worker_id === nothing ? "not spawned" : "worker $(s.worker_id)"
+                        project = s.project === nothing ? "default env" : s.project
+                        revise = s.revise ? "Revise" : "no Revise"
+                        age_min = round(s.age_seconds / 60; digits=1)
+                        push!(lines, "$marker $(s.name) — $worker, $project, $revise ($(age_min)min)")
+                    end
+                    TextContent(text = join(lines, "\n"))
+
+                elseif action_lower == "destroy"
+                    destroy_session!(name)
+                    current = SESSIONS.current
+                    msg = "Session '$(name)' destroyed."
+                    if current !== nothing
+                        msg *= "\nCurrent session: $current"
+                    end
+                    TextContent(text = msg)
+
+                else
+                    error("Unexpected action: $action_lower")
                 end
-                # Success - now update the mode
-                REPL_MODE[] = mode_sym
-                worker_info = WORKER.worker_id !== nothing ? "Worker (ID: $(WORKER.worker_id)) remains available" : "No distributed worker active"
-                msg = """
-Mode switched to: tmux
-- Julia REPL running in tmux session '$(TMUX_REPL.session_name)'
-- Terminal window should be visible (you can type directly in it)
-- $worker_info
+            catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
+                if e isa ArgumentError
+                    TextContent(text = "Error: $(e.msg)")
+                else
+                    TextContent(text = "Internal error in session tool: $(sprint(showerror, e))")
+                end
+            end
+        end
+    )
+end
+
 """
-            else  # :distributed
-                try
-                    ensure_worker!()
-                catch e
-                    return TextContent(text = "Error: Failed to start distributed worker: $e")
-                end
-                # Success - now update the mode
-                REPL_MODE[] = mode_sym
-                tmux_info = TMUX_REPL.active ? "Tmux session '$(TMUX_REPL.session_name)' remains running" : "No tmux session active"
-                msg = """
-Mode switched to: distributed
-- Using Distributed.jl worker (ID: $(WORKER.worker_id))
-- $tmux_info
-"""
-            end
+    create_revise_tool() -> MCPTool
 
-            TextContent(text = msg)
+Create the revise tool for hot-reloading Julia code changes.
+"""
+function create_revise_tool()
+    MCPTool(
+        name = "revise",
+        description = """
+Hot-reload Julia code changes using Revise.jl — no session restart needed.
+
+Revise.jl automatically picks up changes to functions, methods, and module code
+without losing session state. This is the preferred alternative to `reset`.
+
+Actions:
+- revise: Trigger Revise.revise() to pick up all file changes
+- track: Start tracking a file with Revise (changes auto-detected)
+- includet: Include a file with Revise tracking (hot-reloadable include)
+- status: Show what Revise is currently tracking
+
+Use `revise(action="revise")` after editing .jl files to reload changes.
+Use `reset` only for struct layout changes (Julia < 1.12) or corrupted state.
+
+Examples:
+- revise(action="revise")
+- revise(action="track", path="src/myfile.jl")
+- revise(action="includet", path="scripts/analysis.jl")
+- revise(action="status")
+""",
+        parameters = [
+            ToolParameter(
+                name = "action",
+                type = "string",
+                description = "Revise action: revise, track, includet, or status",
+                required = true
+            ),
+            ToolParameter(
+                name = "path",
+                type = "string",
+                description = "File path. Required for track and includet actions.",
+                required = false
+            ),
+            ToolParameter(
+                name = "session",
+                type = "string",
+                description = "Session name. If omitted, uses the current session.",
+                required = false
+            )
+        ],
+        handler = params -> begin
+            try
+                action_lower = _validate_action(params, ["revise", "track", "includet", "status"])
+
+                session_name = get(params, "session", nothing)
+                session = resolve_session(session_name)
+
+                # Validate path upfront for actions that need it
+                if action_lower in ["track", "includet"]
+                    path = _require_string_param(params, "path", action_lower)
+                end
+
+                if action_lower == "revise"
+                    ensure_worker!(session)
+                    result = revise_on_worker!(session)
+                    msg = result.success ? result.message : "Error: $(result.message)"
+                    TextContent(text = msg)
+
+                elseif action_lower == "track"
+                    ensure_worker!(session)
+                    result = track_file_on_worker!(session, path)
+                    msg = result.success ? result.message : "Error: $(result.message)"
+                    TextContent(text = msg)
+
+                elseif action_lower == "includet"
+                    ensure_worker!(session)
+                    result = includet_on_worker!(session, path)
+                    msg = result.success ? result.message : "Error: $(result.message)"
+                    TextContent(text = msg)
+
+                elseif action_lower == "status"
+                    status = get_revise_status(session)
+                    if !status.available
+                        msg = "Revise.jl is not available in session '$(session.name)'.\nInstall it with: pkg(action=\"add\", packages=\"Revise\")"
+                        if !isempty(status.note)
+                            msg *= "\nNote: $(status.note)"
+                        end
+                        return TextContent(text = msg)
+                    end
+
+                    lines = String["Revise.jl Status (session: $(session.name)):"]
+                    push!(lines, "Watched packages: $(isempty(status.watched_packages) ? "(none)" : join(status.watched_packages, ", "))")
+                    push!(lines, "Tracked files: $(isempty(status.tracked_files) ? "(none)" : string(length(status.tracked_files), " files"))")
+                    for f in status.tracked_files
+                        push!(lines, "  - $f")
+                    end
+                    if !isempty(status.note)
+                        push!(lines, "Note: $(status.note)")
+                    end
+                    TextContent(text = join(lines, "\n"))
+
+                else
+                    error("Unexpected action: $action_lower")
+                end
+            catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
+                if e isa ArgumentError
+                    TextContent(text = "Error: $(e.msg)")
+                else
+                    TextContent(text = "Internal error in revise tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
+                end
+            end
         end
     )
 end

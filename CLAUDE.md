@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AgentREPL.jl is a Julia package providing a persistent REPL for AI agents via MCP (Model Context Protocol) STDIO transport. It solves Julia's "Time to First X" (TTFX) problem by maintaining a persistent Julia worker subprocess, avoiding the 1-2 second startup penalty for each command.
+AgentREPL.jl is a Julia package providing a persistent REPL for AI agents via MCP (Model Context Protocol) STDIO transport. It solves Julia's "Time to First X" (TTFX) problem by maintaining persistent Julia worker subprocesses, avoiding the 1-2 second startup penalty for each command. Supports multiple named sessions and Revise.jl hot-reloading.
 
 ## Build and Test Commands
 
@@ -24,33 +24,31 @@ JULIA_REPL_PROJECT=/path/to/project julia --project=. bin/julia-repl-server
 
 ## Architecture
 
-### Worker Subprocess Model
+### Multi-Session Worker Subprocess Model
 
-AgentREPL uses a **worker subprocess architecture** (via Distributed.jl):
+AgentREPL uses a **multi-session worker subprocess architecture** (via Distributed.jl):
 - The MCP server runs in the main Julia process
-- Code evaluation happens in a spawned worker process
-- `reset` kills the worker and spawns a fresh one (true hard reset)
-- `activate` switches the worker's active project/environment
-
-This design enables true session reset (including type redefinitions) without restarting Claude Code.
+- Each named session has its own worker process for code evaluation
+- Sessions are isolated: separate variables, packages, and project environments
+- `reset` kills a session's worker and spawns a fresh one (true hard reset)
+- `activate` switches a session's active project/environment
+- Revise.jl is auto-loaded on workers for hot-reloading support
 
 ### File Structure
-
-The package is split into logical modules:
 
 ```
 src/
   AgentREPL.jl           # Main module (imports, includes, exports only)
-  types.jl               # State structs (WorkerState, LogViewerState, HighlightConfig)
+  types.jl               # State structs (SessionState, SessionRegistry, LogViewerState, HighlightConfig)
   highlighting.jl        # Julia syntax highlighting (uses JuliaSyntaxHighlighting.jl)
   formatting.jl          # Result formatting, stacktrace truncation
+  sessions.jl            # Multi-session lifecycle (create, switch, list, destroy)
   worker.jl              # Distributed worker lifecycle (ensure_worker!, capture_eval_on_worker)
+  revise.jl              # Revise.jl integration (revise, track, includet on workers)
   packages.jl            # Pkg actions, project activation
   logging.jl             # Log viewer functionality
-  tools.jl               # MCP tool definitions
+  tools.jl               # MCP tool definitions (8 tools)
   server.jl              # start_server function
-  deprecated/
-    tmux.jl              # Deprecated tmux bidirectional REPL (disabled by default)
 ```
 
 ### Syntax Highlighting
@@ -61,70 +59,75 @@ Julia code in REPL output is syntax highlighted using [JuliaSyntaxHighlighting.j
 - `JULIA_REPL_HIGHLIGHT`: `"true"` (default) or `"false"` - enable/disable highlighting
 - `JULIA_REPL_OUTPUT_FORMAT`: `"ansi"` (default), `"markdown"`, or `"plain"` - output format
 
-**Output formats:**
-- **ansi**: ANSI escape codes for terminal colors (keywords in red, strings in green, comments in gray)
-- **markdown**: Wraps code in ` ```julia ` fences (for future Claude Code markdown rendering support)
-- **plain**: No highlighting, returns code as-is
-
-**Example**: Set environment variables in the MCP server configuration:
-```bash
-JULIA_REPL_HIGHLIGHT=true JULIA_REPL_OUTPUT_FORMAT=ansi julia --project=. bin/julia-repl-server
-```
-
 ### Key Functions
 
-- **`ensure_worker!()`** - Ensures a worker process exists, creating one if needed (`worker.jl`)
-- **`kill_worker!()`** / **`reset_worker!()`** - Worker lifecycle management (`worker.jl`)
-- **`capture_eval_on_worker(code)`** - Evaluates code on the worker with output capture (`worker.jl`)
-- **`format_result(...)`** - Formats results with syntax highlighting (`formatting.jl`)
-- **`highlight_code(code; format)`** - Apply syntax highlighting to Julia code (`highlighting.jl`)
-- **`is_highlighting_enabled()`** / **`get_output_format()`** - Configuration getters (`highlighting.jl`)
-- **`activate_project_on_worker!(path)`** - Switches the worker's environment (`packages.jl`)
-- **`run_pkg_action_on_worker(action, pkgs)`** - Package management on worker (`packages.jl`)
-- **`start_server()`** - Entry point that registers MCP tools and starts the server (`server.jl`)
+**Session Management (`sessions.jl`):**
+- **`get_current_session!()`** - Get current session, auto-creates "default" if none
+- **`create_session!(name)`** - Create a new named session
+- **`switch_session!(name)`** - Switch to a different session
+- **`destroy_session!(name)`** - Kill session and its worker
+- **`list_sessions()`** - List all sessions with status
+- **`resolve_session(name)`** - Resolve optional session name to SessionState
+
+**Worker Lifecycle (`worker.jl`):**
+- **`ensure_worker!(session)`** - Ensure worker exists for a session, creating one if needed
+- **`kill_worker!(session)`** / **`reset_worker!(session)`** - Worker lifecycle management
+- **`capture_eval_on_worker(code; timeout, session_name)`** - Evaluate code with output capture
+- **`get_worker_info(session)`** - Returns session metadata
+
+**Revise Integration (`revise.jl`):**
+- **`revise_on_worker!(session)`** - Call Revise.revise() on worker
+- **`track_file_on_worker!(session, filepath)`** - Track a file with Revise
+- **`includet_on_worker!(session, filepath)`** - Hot-reloadable include
+- **`is_revise_available(session)`** - Check if Revise is loaded
+- **`get_revise_status(session)`** - Get tracking status
+
+**Formatting (`formatting.jl`):**
+- **`truncate_output(text, max_chars)`** - Truncate text keeping head (60%) and tail (40%)
+- **`format_elapsed(elapsed)`** - Format elapsed time as human-readable string
+- **`format_result(...)`** - Formats results with syntax highlighting
+
+**Packages (`packages.jl`):**
+- **`activate_project_on_worker!(path; session_name)`** - Switches environment
+- **`run_pkg_action_on_worker(action, pkgs; session_name)`** - Package management
 
 ### MCP Tools
 
-Seven tools registered via ModelContextProtocol.jl:
+Eight tools registered via ModelContextProtocol.jl:
 
 1. **`eval`** - Evaluates Julia code with persistent state on the worker
 2. **`reset`** - **Hard reset**: kills worker, spawns fresh one (enables type redefinition)
-3. **`info`** - Returns session metadata (Julia version, project, variables, worker ID)
+3. **`info`** - Returns session metadata (Julia version, project, variables, Revise status)
 4. **`pkg`** - Package management (add, rm, status, update, instantiate, resolve, test, develop, free)
 5. **`activate`** - Switch active project/environment
 6. **`log_viewer`** - Control log viewer for visual REPL output
-7. **`mode`** - Switch between distributed and tmux modes (tmux is deprecated)
+7. **`session`** - Manage multiple named sessions (create, switch, list, destroy)
+8. **`revise`** - Hot-reload code changes via Revise.jl (revise, track, includet, status)
+
+All tools except `log_viewer` and `session` accept an optional `session` parameter. The `session` tool identifies targets via its `name` parameter instead.
 
 ### Key Design Decisions
 
-- **Worker subprocess model**: Enables true hard reset with type redefinition
-- **Lazy worker spawning**: Worker is created on first tool use, not at server startup (avoids STDIO conflicts with MCP)
-- **Expression-based IPC**: Uses `remotecall_fetch(Core.eval, worker_id, Main, expr)` instead of closures to avoid serialization issues
+- **Multi-session model**: Each session has its own Distributed.jl worker with isolated state
+- **Revise.jl auto-loading**: Workers attempt `using Revise` on startup (graceful degradation)
+- **Lazy worker spawning**: Worker created on first tool use, not at server startup
+- **Expression-based IPC**: Uses `remotecall_fetch(Core.eval, worker_id, Main, expr)` to avoid serialization issues
 - **STDIO transport only**: No network ports for security
 - **Environment persistence**: Activated environment survives reset
-- **Result-first formatting**: Shows Result/Error first for better collapsed view UX
-
-### Tmux Mode Deprecation
-
-The tmux bidirectional REPL mode is **deprecated** and disabled by default. The tmux mode has unfixable architectural issues with marker pollution - the completion detection marker is always visible in the terminal output.
-
-**Recommended alternative**: Use distributed mode (default) with the log viewer for visual output:
-- Set `JULIA_REPL_VIEWER=auto` environment variable
-- Or manually run: `tail -f ~/.julia/logs/repl.log`
-
-To force-enable tmux mode (not recommended):
-- Set `JULIA_REPL_ENABLE_TMUX=true` environment variable
+- **Output-then-result formatting**: Shows stdout first, then result/error, then timing — optimized for collapsed view UX
 
 ## Testing
 
-Tests are in `test/runtests.jl`, `test/test_eval.jl`, and `test/test_highlighting.jl` covering:
+Tests are in `test/runtests.jl`, `test/test_eval.jl`, `test/test_sessions.jl`, `test/test_revise.jl`, and `test/test_highlighting.jl` covering:
 - Code evaluation (arithmetic, variables, functions, multi-line)
 - Output capture and error handling
-- Result formatting
-- Symbol management and protected symbol validation
+- Result formatting and truncation
 - Worker subprocess lifecycle (spawn, reset, persistence)
+- Multi-session management (create, switch, isolate, destroy)
+- Session-targeted evaluation
 - Pkg actions (test, develop, free)
-- Syntax highlighting (ANSI, markdown, plain formats, configuration)
+- Revise.jl integration (status, availability)
+- Syntax highlighting (ANSI, markdown, plain formats)
 
 ## Entry Point
 
@@ -134,8 +137,9 @@ Tests are in `test/runtests.jl`, `test/test_eval.jl`, and `test/test_highlightin
 
 The `claude-plugin/` directory contains a Claude Code plugin that:
 - Auto-configures the MCP server (no manual `claude mcp add` needed)
-- Provides commands: `/julia-reset`, `/julia-info`, `/julia-pkg`, `/julia-activate`
-- Includes a skill with best practices for Julia development
+- Provides skills: `/julia-reset`, `/julia-info`, `/julia-pkg`, `/julia-activate`, `/julia-log`, `/julia-session`, `/julia-revise`, `/julia-develop`
+- Includes auto-triggering skills for Julia evaluation best practices and language expertise
+- Has hooks: PreToolUse (code display validation), PostToolUse (auto-Revise on .jl file edits)
 
 Install with:
 ```bash
@@ -166,8 +170,10 @@ println("Hello!")
 
 This package supports modern Julia development workflows:
 
-- **Testing**: Use `pkg(action="test")` to run package tests
-- **Development**: Use `pkg(action="develop", packages="./path")` for local package development
+- **Hot-reloading**: Use `revise(action="revise")` after editing .jl files to reload changes without restart
+- **Multi-session**: Use `session(action="create", name="...")` for parallel isolated workspaces
+- **Testing**: Use `pkg(action="test")` to run package tests (call `revise` first for latest changes)
+- **Development**: Use `pkg(action="develop", packages="./path")` + Revise for local package development
 - **Environment management**: Use `activate` + `pkg(action="instantiate")` for project-specific environments
 
 See [Modern Julia Workflows](https://modernjuliaworkflows.org/) for best practices.

@@ -1,25 +1,62 @@
 # types.jl - State structs and global constants
 
 """
-    WorkerState
+    SessionState
 
-Mutable state container for the worker subprocess.
+State for a named Julia REPL session. Each session has its own worker process,
+project environment, and Revise.jl tracking state.
 
 # Fields
-- `worker_id::Union{Int, Nothing}`: The Distributed.jl worker process ID, or `nothing` if no worker exists
-- `project_path::Union{String, Nothing}`: Path to the active Julia project/environment, persists across resets
+- `name::String`: Session name (e.g., "default", "analysis", "testing") — must not be empty, immutable after construction
+- `worker_id::Union{Int, Nothing}`: Distributed.jl worker process ID
+- `project_path::Union{String, Nothing}`: Active project/environment path (persists across resets)
+- `revise_loaded::Bool`: Whether Revise.jl was successfully loaded on the worker
+- `created_at::Float64`: Session creation time (from `time()`)
+- `last_used::Float64`: Last time this session was used (from `time()`)
 """
-mutable struct WorkerState
+mutable struct SessionState
+    const name::String
     worker_id::Union{Int, Nothing}
     project_path::Union{String, Nothing}
+    revise_loaded::Bool
+    created_at::Float64
+    last_used::Float64
+
+    function SessionState(name::String, worker_id::Union{Int,Nothing}, project_path::Union{String,Nothing}, revise_loaded::Bool=false)
+        isempty(name) && error("Session name must not be empty")
+        now = time()
+        new(name, worker_id, project_path, revise_loaded, now, now)
+    end
 end
 
 """
-    WORKER::WorkerState
+    SessionRegistry
 
-Global state for the worker subprocess. Access via `ensure_worker!()` rather than directly.
+Registry of all active Julia REPL sessions.
+
+# Fields
+- `sessions::Dict{String, SessionState}`: Map of session name to state
+- `current::Union{String, Nothing}`: Name of the currently active session
 """
-const WORKER = WorkerState(nothing, nothing)
+mutable struct SessionRegistry
+    sessions::Dict{String, SessionState}
+    current::Union{String, Nothing}
+end
+
+"""
+    SESSIONS::SessionRegistry
+
+Global session registry. All session operations go through this registry.
+"""
+const SESSIONS = SessionRegistry(Dict{String,SessionState}(), nothing)
+
+"""
+    _INITIAL_PROJECT_PATH::Ref{Union{String,Nothing}}
+
+Stores the initial project path so new sessions can inherit it.
+Set by start_server(project_dir=...), which reads JULIA_REPL_PROJECT upstream.
+"""
+const _INITIAL_PROJECT_PATH = Ref{Union{String,Nothing}}(nothing)
 
 """
     LogViewerState
@@ -29,13 +66,11 @@ State for the optional log viewer feature that displays REPL output in a separat
 # Fields
 - `log_path::Union{String, Nothing}`: Path to the log file (default: `~/.julia/logs/repl.log`)
 - `log_io::Union{IO, Nothing}`: Open file handle for writing logs
-- `viewer_pid::Union{Int, Nothing}`: PID of the viewer process (if spawned)
 - `mode::Symbol`: Current mode - `:none`, `:file`, or `:tmux`
 """
 mutable struct LogViewerState
     log_path::Union{String, Nothing}
     log_io::Union{IO, Nothing}
-    viewer_pid::Union{Int, Nothing}
     mode::Symbol  # :none, :file, :tmux
 end
 
@@ -44,43 +79,7 @@ end
 
 Global state for the log viewer. Configure via `setup_log_viewer!()`.
 """
-const LOG_VIEWER = LogViewerState(nothing, nothing, nothing, :none)
-
-"""
-    TmuxREPLState
-
-State for the tmux-based bidirectional REPL mode (alternative to distributed worker model).
-
-# Fields
-- `session_name::String`: Name of the tmux session (default: `"julia-repl"`)
-- `active::Bool`: Whether the tmux session is currently running
-- `project_path::Union{String, Nothing}`: Path to the active Julia project
-- `terminal_opened::Bool`: Whether a terminal window has been opened for this session
-"""
-mutable struct TmuxREPLState
-    session_name::String
-    active::Bool
-    project_path::Union{String, Nothing}
-    terminal_opened::Bool
-end
-
-"""
-    TMUX_REPL::TmuxREPLState
-
-Global state for tmux-based REPL mode. Only used when `REPL_MODE[] == :tmux`.
-"""
-const TMUX_REPL = TmuxREPLState("julia-repl", false, nothing, false)
-
-"""
-    REPL_MODE::Ref{Symbol}
-
-Global REPL execution mode. Possible values:
-- `:distributed` (default): Uses Distributed.jl worker subprocess
-- `:tmux`: Uses tmux session for bidirectional REPL with visible terminal (DEPRECATED)
-
-Set via `JULIA_REPL_MODE` environment variable before starting the server.
-"""
-const REPL_MODE = Ref{Symbol}(:distributed)
+const LOG_VIEWER = LogViewerState(nothing, nothing, :none)
 
 """
     HighlightConfig
@@ -118,7 +117,16 @@ Global syntax highlighting configuration. Set via environment variables:
 - `JULIA_REPL_HIGHLIGHT`: "true" or "false" (default: "true")
 - `JULIA_REPL_OUTPUT_FORMAT`: "ansi", "markdown", or "plain" (default: "ansi")
 """
-const HIGHLIGHT_CONFIG = HighlightConfig(
-    lowercase(get(ENV, "JULIA_REPL_HIGHLIGHT", "true")) == "true",
-    _validate_output_format(get(ENV, "JULIA_REPL_OUTPUT_FORMAT", "ansi"))
-)
+const HIGHLIGHT_CONFIG = HighlightConfig(true, :ansi)
+
+"""
+    _init_highlight_config!()
+
+Re-read environment variables into HIGHLIGHT_CONFIG. Called from `__init__()`
+to ensure runtime values are used instead of precompilation-cached defaults.
+"""
+function _init_highlight_config!()
+    HIGHLIGHT_CONFIG.enabled = lowercase(get(ENV, "JULIA_REPL_HIGHLIGHT", "true")) == "true"
+    HIGHLIGHT_CONFIG.format = _validate_output_format(get(ENV, "JULIA_REPL_OUTPUT_FORMAT", "ansi"))
+    nothing
+end

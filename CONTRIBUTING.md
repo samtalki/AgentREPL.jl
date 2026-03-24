@@ -6,7 +6,7 @@ Thank you for your interest in contributing to AgentREPL.jl! This document provi
 
 ### Prerequisites
 
-- Julia 1.10 or later
+- Julia 1.12 or later
 - Git
 - (Optional) Claude Code for testing the MCP integration
 
@@ -156,38 +156,54 @@ Key benefits:
 
 | File | Purpose |
 |------|---------|
-| `src/AgentREPL.jl` | Main module with all MCP tools |
+| `src/AgentREPL.jl` | Main module (imports, includes, exports) |
+| `src/types.jl` | State structs (SessionState, SessionRegistry, etc.) |
+| `src/tools.jl` | MCP tool definitions (8 tools) |
+| `src/sessions.jl` | Multi-session lifecycle management |
+| `src/worker.jl` | Distributed worker lifecycle |
+| `src/revise.jl` | Revise.jl integration |
+| `src/highlighting.jl` | Syntax highlighting |
+| `src/formatting.jl` | Result formatting, stacktrace truncation |
+| `src/packages.jl` | Pkg actions, project activation |
+| `src/logging.jl` | Log viewer functionality |
+| `src/server.jl` | start_server function |
 | `bin/julia-repl-server` | Entry point script |
-| `test/test_eval.jl` | Test suite |
-| `claude-plugin/` | Claude Code plugin |
+| `test/` | Tests (test_eval, test_sessions, test_highlighting, test_revise) |
+| `claude-plugin/` | Claude Code plugin (skills, hooks) |
 
 ### Important Functions
 
-- `ensure_worker!()` - Ensures worker exists, creates if needed
-- `capture_eval_on_worker(code)` - Evaluates code with output capture
-- `reset_worker!()` - Kills worker and spawns fresh one
-- `activate_project_on_worker!(path)` - Switches environment
+- `ensure_worker!(session)` - Ensures worker exists for a session, creates if needed
+- `capture_eval_on_worker(code; timeout, session_name)` - Evaluates code with output capture
+- `reset_worker!(session)` - Kills session's worker and spawns fresh one
+- `resolve_session(session_name)` - Resolves optional session name to SessionState
+- `create_session!(name)` / `switch_session!(name)` / `destroy_session!(name)` - Session lifecycle
+- `revise_on_worker!(session)` - Triggers Revise.revise() on worker
+- `activate_project_on_worker!(path; session_name)` - Switches environment
 - `start_server()` - Entry point, registers MCP tools
 
 ## Adding New Features
 
 ### Adding a New MCP Tool
 
-1. Define the tool in `start_server()`:
+1. Define a `create_<toolname>_tool()` function in `src/tools.jl` that returns an `MCPTool`:
    ```julia
-   new_tool = MCPTool(
-       name = "tool_name",
-       description = "...",
-       parameters = [...],
-       handler = params -> begin
-           # implementation
-       end
-   )
+   function create_mytool_tool()
+       MCPTool(
+           name = "mytool",
+           description = "...",
+           parameters = [...],
+           handler = params -> begin
+               # implementation
+           end
+       )
+   end
    ```
+   See `create_eval_tool()` in `src/tools.jl` for the pattern.
 
-2. Add it to the server's tool list
+2. Call it from `start_server()` in `src/server.jl` and add it to the `tools` list in `mcp_server()`
 
-3. Add tests in `test/test_eval.jl`
+3. Add tests (e.g., `test/test_mytool.jl`)
 
 4. Document in README.md
 

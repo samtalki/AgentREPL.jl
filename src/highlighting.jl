@@ -6,8 +6,8 @@
 """
     is_highlighting_enabled() -> Bool
 
-Check if syntax highlighting is enabled via HIGHLIGHT_CONFIG.
-Reads from JULIA_REPL_HIGHLIGHT environment variable (default: "true").
+Check if syntax highlighting is enabled. Returns `HIGHLIGHT_CONFIG.enabled`,
+which is initialized from the `JULIA_REPL_HIGHLIGHT` environment variable at module load time.
 """
 function is_highlighting_enabled()::Bool
     return HIGHLIGHT_CONFIG.enabled

@@ -24,6 +24,9 @@ using AgentREPL
 
 # Get optional project directory from environment
 project_dir = get(ENV, "JULIA_REPL_PROJECT", nothing)
+if project_dir !== nothing && isempty(project_dir)
+    project_dir = nothing
+end
 
 # Start the server (blocks until terminated)
 AgentREPL.start_server(; project_dir=project_dir)

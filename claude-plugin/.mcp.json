@@ -5,7 +5,12 @@
       "args": [
         "--project=${CLAUDE_PLUGIN_ROOT}/..",
         "${CLAUDE_PLUGIN_ROOT}/../bin/julia-repl-server"
-      ]
+      ],
+      "env": {
+        "JULIA_REPL_HIGHLIGHT": "true",
+        "JULIA_REPL_OUTPUT_FORMAT": "ansi",
+        "JULIA_REPL_PROJECT": "${JULIA_REPL_PROJECT}"
+      }
     }
   }
 }

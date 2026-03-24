@@ -6,7 +6,7 @@ allowed-tools:
   - mcp__plugin_julia_julia-repl__pkg
 ---
 
-# Julia Package Management Command
+# Julia Package Management
 
 Manage Julia packages in the current environment.
 
@@ -36,18 +36,6 @@ Parse the user's arguments to determine the action and packages:
 
 Call `pkg` with the appropriate action and packages parameters.
 
-## Examples
-
-```
-/julia-pkg add Plots
-/julia-pkg status
-/julia-pkg update
-/julia-pkg instantiate
-/julia-pkg test
-/julia-pkg develop ./path/to/MyPackage
-/julia-pkg free MyPackage
-```
-
 ## Notes
 
 - After adding packages, remind the user to load them with `using PackageName`
@@ -55,3 +43,4 @@ Call `pkg` with the appropriate action and packages parameters.
 - The `test` action runs Pkg.test() - can be slow for large test suites
 - The `develop` action puts a package in development mode (uses local code)
 - The `free` action exits development mode (returns to registry version)
+- After `develop`, consider using `revise(action="revise")` to hot-reload changes

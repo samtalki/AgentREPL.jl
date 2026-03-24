@@ -1,22 +1,21 @@
 ---
 name: julia-evaluation
-description: This skill should be used when the user asks to "run Julia code", "evaluate Julia", "use Julia", mentions "persistent Julia session", "TTFX", or wants to work with Julia for data analysis, scientific computing, or package development. Provides best practices for using the Julia REPL MCP tools effectively.
-version: 0.5.0
+description: This skill should be used when the user asks to "run Julia code", "evaluate Julia", "use Julia", "test Julia package", "add Julia package", "Julia REPL", mentions "persistent Julia session", "TTFX", "JIT compilation", or wants to work with Julia for data analysis, scientific computing, numerical computing, linear algebra, differential equations, machine learning, optimization, or package development. Also activates when user mentions Julia-specific concepts like "multiple dispatch", "type system", "metaprogramming", "macro", "DataFrames", "Plots", "Flux", or any Julia package names. Activates for Revise.jl hot-reloading, multi-session management, and Julia development workflows.
+version: 0.6.0
 ---
 
 # Julia Development Best Practices
 
-This skill provides guidance for using the persistent Julia REPL via MCP tools. AgentREPL maintains a worker subprocess for code evaluation, eliminating the "Time to First X" (TTFX) startup penalty that normally occurs with each Julia invocation.
+This skill provides comprehensive guidance for using the persistent Julia REPL via MCP tools. AgentREPL maintains worker subprocesses for code evaluation, eliminating the "Time to First X" (TTFX) startup penalty. Multiple named sessions can run concurrently with isolated state.
 
 ## Architecture
 
-AgentREPL uses a **distributed worker model** (recommended):
-
-### Distributed Mode (Default, Recommended)
+AgentREPL uses a **multi-session distributed worker model**:
 - The MCP server runs in the main process (STDIO transport)
-- Code evaluation happens in a spawned worker process (via Distributed.jl)
-- `reset` kills the worker and spawns a fresh one (true hard reset)
-- Use `log_viewer` tool to open a terminal showing output in real-time
+- Each session has its own worker process (via Distributed.jl)
+- Workers persist across calls — variables, functions, and packages stay loaded
+- Revise.jl is auto-loaded on workers for hot-reloading code changes
+- `reset` kills a session's worker and spawns a fresh one (true hard reset)
 
 ### Visual Output with Log Viewer
 
@@ -25,23 +24,32 @@ To see Julia output as it happens:
 log_viewer(mode="auto")   # Opens a terminal with live output
 ```
 
-Or set `JULIA_REPL_VIEWER=auto` environment variable before starting.
-
-### Note on Tmux Mode
-
-Tmux mode is deprecated due to unfixable marker pollution issues. Use distributed mode (default) with `log_viewer` for visual output.
-
 ## Available Tools
 
 | Tool | Purpose |
 |------|---------|
-| `eval` | Evaluate Julia code with persistent state |
-| `reset` | **Hard reset** - kills worker, spawns fresh one (enables type redefinition) |
-| `info` | Get session info (version, project, variables, worker ID) |
+| `eval` | Evaluate Julia code with persistent state, timing, and optional timeout |
+| `reset` | **Hard reset** — kills worker, spawns fresh one (enables type redefinition) |
+| `info` | Get session info (version, project, typed variables, Revise status, worker ID) |
 | `pkg` | Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free) |
 | `activate` | Switch active project/environment |
 | `log_viewer` | Open a terminal window showing Julia output in real-time |
-| `mode` | (Deprecated) Switch between distributed and tmux modes |
+| `session` | Manage multiple sessions (create, switch, list, destroy) |
+| `revise` | Hot-reload code changes (revise, track, includet, status) |
+
+All tools accept an optional `session` parameter to target a specific session. When omitted, the current session is used.
+
+### Eval Tool Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `code` | string | (required) | Julia code to evaluate |
+| `timeout` | number | none | Max execution time in seconds. Worker is killed on timeout. |
+| `max_output` | integer | 50000 | Max characters before output is truncated (head+tail preserved) |
+| `max_stackframes` | integer | 5 | Max stacktrace frames in errors. Increase for deep macro errors. |
+| `session` | string | current | Target session name |
+
+Every eval result includes execution timing (e.g., `[45.2ms]` or `[1.23s]`).
 
 ## Critical: Beautiful Code and Output Display
 
@@ -76,7 +84,61 @@ julia> det(A)
 0.0
 ```
 
-This workflow gives users the best of both worlds: they can verify code before it runs, and see results in a beautiful, readable format afterward.
+## Session Management
+
+### Default Session
+If you call `eval` without creating a session, a "default" session is auto-created. Single-session workflows work identically to before.
+
+### When to Create Multiple Sessions
+- **Development + Testing**: Keep compiled state separate
+- **Multiple Projects**: Different environments side by side
+- **Benchmarking**: Isolate benchmark state from development
+- **Experimentation**: Try risky changes without affecting main work
+
+### Session Commands
+```
+session(action="create", name="analysis")   # Create new session
+session(action="switch", name="analysis")   # Switch to it
+session(action="list")                      # See all sessions
+session(action="destroy", name="old")       # Clean up
+```
+
+Each session has its own:
+- Worker process (isolated state)
+- Project environment
+- Revise.jl tracking
+- Variables and loaded packages
+
+## Revise.jl Workflow (Maximize Session Lifespan)
+
+**Revise.jl is the #1 tool for minimizing REPL restarts.** It's auto-loaded on every worker.
+
+### Core Workflow
+1. Edit `.jl` source files (using Edit/Write tools)
+2. Call `revise(action="revise")` to hot-reload changes
+3. Continue working — all session state is preserved
+
+### When to Use Revise vs Reset
+
+| Change Type | Revise | Reset |
+|-------------|--------|-------|
+| Function body | Use revise | Unnecessary |
+| New function/method | Use revise | Unnecessary |
+| Method signature | Use revise | Unnecessary |
+| Struct **layout** (Julia < 1.12) | Won't work | Required |
+| Corrupted state | Won't fix | Required |
+| Clean slate needed | Not applicable | Required |
+
+### Revise Actions
+```
+revise(action="revise")                          # Pick up all file changes
+revise(action="track", path="src/myfile.jl")     # Track a file
+revise(action="includet", path="script.jl")      # Hot-reloadable include
+revise(action="status")                          # What is Revise watching?
+```
+
+### After Editing Julia Files
+Whenever you edit a `.jl` file, call `revise(action="revise")` to reload the changes into the session. This is automatic if the PostToolUse hook is active.
 
 ## Understanding TTFX (Time to First X)
 
@@ -97,31 +159,37 @@ f(n) = n^2
 ```
 
 ```julia
-# Later call - x and f still exist
+# Later call — x and f still exist
 f(x)  # Returns 1764
 ```
 
 ## Hard Reset with `reset`
 
 The `reset` tool **kills the worker process and spawns a fresh one**. This means:
-
 - All variables are cleared
 - All loaded packages are unloaded
-- **Type definitions can be changed** (impossible with soft reset)
-- The worker starts completely fresh
+- **Type definitions can be changed** (necessary in Julia < 1.12)
+- Revise.jl is reloaded automatically
 
-Use `reset` when:
-- You need to redefine a struct or type
-- Something is in a bad state
-- You want a completely clean slate
+**Prefer `revise` over `reset` whenever possible** — it preserves your session state.
 
 After reset, packages need to be reloaded with `using`.
-
 The activated environment persists across resets.
+
+## Plotting & Visualization
+
+UnicodePlots.jl renders terminal-native plots directly in eval output — no GUI needed:
+
+```julia
+using UnicodePlots
+lineplot(sin, -2π, 2π, title="Sine Wave")
+```
+
+Plots appear as colored Unicode Braille art in the tool response. Supports line, scatter, bar, histogram, heatmap, density, contour, box plots, and more. Use `/julia-plot` for the full reference.
 
 ## Environment Management
 
-Julia best practice is to use project-specific environments. Use `activate` to switch environments:
+Julia best practice is to use project-specific environments. Use `activate` to switch:
 
 ```
 activate(path=".")              # Current directory
@@ -134,7 +202,7 @@ After activation, install dependencies:
 pkg(action="instantiate")
 ```
 
-The activated environment persists even across `reset` calls.
+The activated environment persists across `reset` calls.
 
 ## Package Management
 
@@ -145,162 +213,116 @@ Use `pkg` for all package operations:
 pkg(action="add", packages="JSON, DataFrames, CSV")
 ```
 
-**Checking installed packages:**
-```
-pkg(action="status")
-```
-
-**Installing from Project.toml:**
-```
-pkg(action="instantiate")
-```
-
-**Running tests:**
-```
-pkg(action="test")                    # Test current project
-pkg(action="test", packages="MyPkg")  # Test specific package
-```
-
 **Development workflow (local packages):**
 ```
-pkg(action="develop", packages="./path/to/MyLocalPackage")  # Use local code
-pkg(action="free", packages="MyPackage")                     # Return to registry
+pkg(action="develop", packages="./path/to/MyLocalPackage")
 ```
+After developing, Revise.jl automatically tracks the package source.
 
-After adding a package, load it:
+After adding/developing, load the package:
 ```julia
 using JSON
 ```
 
 ## Testing Workflow
 
-For running tests, use `pkg(action="test")`:
+For running tests, prefer `pkg(action="test")`:
 - With no packages specified, tests the current project
 - With packages specified, tests those specific packages
-- Test output is captured and displayed
 
-This is preferred over running tests via `eval` because it properly isolates the test environment.
+**Before running tests, call `revise(action="revise")`** to pick up latest code changes.
 
-## Development Workflow (Pkg.develop)
+For faster iteration on specific test files:
+```julia
+include("test/runtests.jl")
+```
 
-When developing a local package alongside your project:
+## Development Workflow (Full Cycle)
 
-1. **Put the package in develop mode:**
+When developing a Julia package:
+
+1. **Activate and set up**:
    ```
-   pkg(action="develop", packages="./MyLocalPackage")
-   ```
-
-2. **Make changes to the package source code**
-
-3. **Test your changes:**
-   ```
-   pkg(action="test", packages="MyLocalPackage")
+   activate(path="./MyPackage")
+   pkg(action="instantiate")
    ```
 
-4. **When done, return to registry version:**
-   ```
-   pkg(action="free", packages="MyLocalPackage")
+2. **Load the package**:
+   ```julia
+   using MyPackage
    ```
 
-The `develop` action accepts:
-- Relative paths starting with `./` or `../`
-- Absolute paths starting with `/`
-- Home-relative paths starting with `~`
-- Package names (for developing registered packages from source)
+3. **Edit source files** — make changes to `src/*.jl`
+
+4. **Hot-reload**:
+   ```
+   revise(action="revise")
+   ```
+
+5. **Test**:
+   ```
+   pkg(action="test")
+   ```
+
+6. **Repeat steps 3-5** — no restart needed
+
+## Performance Analysis
+
+### Benchmarking
+```julia
+using BenchmarkTools
+@benchmark sort(rand(1000))
+@btime myfunction($x)  # Use $ for interpolation
+```
+
+### Type Stability
+```julia
+@code_warntype myfunction(args...)
+```
+Red `Any` or `Union` types indicate type instability — fix these for performance.
+
+### Profiling
+```julia
+using Profile
+@profile myfunction(args...)
+Profile.print(noisefloor=2.0)
+```
+
+## Debugging Without Restart
+
+Avoid restarting the session for debugging:
+
+- **`@show x`** — print variable with name
+- **`@info "message" x y`** — structured logging
+- **`@assert condition "message"`** — runtime assertions
+- **`Infiltrator.@infiltrate`** — drop into sub-REPL at a point (requires `using Infiltrator`)
 
 ## Error Handling
-
-Common issues and solutions:
 
 | Error | Cause | Solution |
 |-------|-------|----------|
 | `UndefVarError` | Variable not defined | Re-run earlier code or check spelling |
 | `MethodError` | Wrong argument types | Check function signatures |
 | `LoadError` | Package not installed | Use `pkg(action="add", packages="...")` |
-| `cannot redefine` | Type redefinition | Use `reset` for a fresh worker |
+| `cannot redefine` | Type redefinition | Use `reset` (or `revise` for non-struct changes) |
 | `StackOverflowError` | Infinite recursion | Fix recursion, may need `reset` |
+
+## Handling Hung Code
+
+Use the `timeout` parameter when evaluating code that might hang:
+
+```
+eval(code="while true end", timeout=5)  # kills worker after 5s
+```
+
+If code is already stuck, use `reset` to kill the worker and recover.
 
 ## First-Time Setup
 
-**When first using Julia in a session**, ask the user about their environment preference before running code:
-
-> "Before we start, which Julia environment should I use?
-> 1. **Current directory** - activate Project.toml in this folder (if it exists)
-> 2. **Specific project** - provide a path to a Julia project
-> 3. **Default** - use the global environment
->
-> This determines where packages are installed and what dependencies are available."
-
-Based on their answer:
-- Option 1: `activate(path=".")` then `pkg(action="instantiate")`
-- Option 2: `activate(path="/their/path")` then `pkg(action="instantiate")`
-- Option 3: Proceed without activation (uses default environment)
-
-## Practical Workflow
-
-For a typical Julia task:
-
-1. **First use**: Ask about environment (see above)
-2. **Activate and install**: `activate` + `pkg(action="instantiate")`
-3. **Show code to user**, then call `eval`
-4. **Build incrementally** - variables persist across calls
-5. **Run tests**: `pkg(action="test")` to verify changes
-6. **Use `reset`** if types need redefining or state is corrupted
-
-## Multi-line Code
-
-Multi-line code blocks work naturally:
-
-```julia
-function fibonacci(n)
-    if n <= 1
-        return n
-    end
-    return fibonacci(n-1) + fibonacci(n-2)
-end
-
-[fibonacci(i) for i in 1:10]
-```
-
-## Formatting Results Beautifully
-
-**CRITICAL: Always format Julia results in a readable REPL-style code block.**
-
-After calling `eval`, present the results to the user in a nicely formatted way that mimics the Julia REPL experience. This is especially important for:
-- Matrices and arrays (show the full formatted output)
-- DataFrames and tables
-- Custom types with pretty-printing
-- Multi-line output
-
-**Example - Good formatting:**
-
-```julia
-julia> A = [1 3 4; 4 5 6; 2 0 3]
-3×3 Matrix{Int64}:
- 1  3  4
- 4  5  6
- 2  0  3
-
-julia> inv(A)
-3×3 Matrix{Float64}:
- -0.6   0.36   0.08
-  0.0   0.2   -0.4
-  0.4  -0.24   0.28
-```
-
-**Example - Bad formatting (don't do this):**
-
-> The result is `[1 3 4; 4 5 6; 2 0 3]` and the inverse is `[-0.6 0.36 0.08; 0.0 0.2 -0.4; 0.4 -0.24 0.28]`
-
-The REPL-style formatting:
-- Shows the `julia>` prompt with the command
-- Preserves matrix/array alignment and spacing
-- Makes numerical results easy to read and verify
-- Feels like an interactive Julia session
-
-## Output Capture
-
-Both return values and printed output are captured from the `eval` tool. Format them beautifully as shown above.
+When first using Julia in a session:
+1. Ask the user which environment to use (current directory, specific path, or global)
+2. `activate` and `pkg(action="instantiate")`
+3. Check Revise.jl availability: `revise(action="status")`
 
 ## When NOT to Use These Tools
 
@@ -313,4 +335,5 @@ Use the MCP tools when:
 - Interactive development and exploration
 - Iterative work where state should persist
 - Avoiding TTFX overhead matters
-- Package development workflow
+- Package development with hot-reloading
+- Working with multiple projects simultaneously

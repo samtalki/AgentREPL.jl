@@ -1,6 +1,6 @@
 # AgentREPL.jl
 
-Persistent Julia REPL for AI agents via MCP (Model Context Protocol).
+Persistent Julia REPL for AI agents via MCP (Model Context Protocol). Supports multiple isolated sessions and Revise.jl hot-reloading.
 
 **The Problem:** Julia's "Time to First X" (TTFX) problem severely impacts AI agent workflows. Each `julia -e "..."` call incurs 1-2s startup + package loading + JIT compilation. AI agents like Claude Code spawn fresh Julia processes per command, wasting minutes of compute time.
 
@@ -8,27 +8,15 @@ Persistent Julia REPL for AI agents via MCP (Model Context Protocol).
 
 ## Why AgentREPL?
 
-| Feature | AgentREPL | MCPRepl.jl | REPLicant.jl |
-|---------|-----------|------------|--------------|
-| Transport | **STDIO** | HTTP :3000 | TCP :8000+ |
-| Auto-start | **Yes** | No (manual) | No (manual) |
-| Network port | **None** | Yes | Yes |
-| True hard reset | **Yes** | No | No |
-| Type redefinition | **Yes** | No | No |
-| Test support | **Yes** | No | No |
-| Pkg.develop support | **Yes** | No | No |
-| Registry eligible | **Yes** | No (security) | No |
-| Persistent | Yes | Yes | Yes |
-| Solves TTFX | Yes | Yes | Yes |
+AgentREPL is the simplest way to give Claude Code a persistent Julia session. Three things set it apart:
 
-### Key Advantages
+1. **Zero-friction setup.** STDIO transport means Claude Code spawns and manages the Julia process automatically. No server to start, no port to configure, no process to monitor. Install the plugin and start coding.
 
-- **STDIO Transport**: No network port opened, more secure, can be registered in Julia General
-- **Auto-spawns**: Claude Code starts AgentREPL automatically when needed
-- **Persistent State**: Variables, functions, and loaded packages survive across calls
-- **True Hard Reset**: Worker subprocess model allows type redefinitions without restarting Claude Code
-- **Modern Workflows**: Built-in support for `Pkg.test`, `Pkg.develop`, and `Pkg.free`
-- **Simple Setup**: Use the plugin for zero-config, or one command for manual setup
+2. **Workflow-native Revise.jl.** Every worker auto-loads Revise.jl. The plugin's PostToolUse hook automatically calls `revise` after you edit `.jl` files. You never manually reload code.
+
+3. **True process isolation.** Each session is a separate Distributed.jl worker. You can redefine structs, kill crashed sessions, and run parallel workloads without cross-contamination. `reset` does what it says -- complete state erasure including type definitions.
+
+AgentREPL is not a Julia IDE replacement. It has 8 tools, not 35. It does not have debugging, semantic search, or a dashboard. If you need those, see the [comparison section](#choosing-a-julia-mcp-server) below. AgentREPL's approach is that `eval` plus Julia's existing introspection capabilities (which you can call directly via `eval`) covers most agent workflows with minimal complexity.
 
 ## Installation
 
@@ -55,8 +43,9 @@ claude /plugin add samtalki/AgentREPL.jl
 
 This provides:
 - Auto-configured MCP server (no manual setup)
-- Slash commands: `/julia-reset`, `/julia-info`, `/julia-pkg`, `/julia-activate`
-- Best practices skill for Julia development
+- 8 skills: `/julia-reset`, `/julia-info`, `/julia-pkg`, `/julia-activate`, `/julia-log`, `/julia-session`, `/julia-revise`, `/julia-develop`
+- Auto-triggering skills for Julia evaluation best practices and language expertise
+- Hooks: code display validation before `eval`, automatic `revise` after `.jl` file edits
 
 ### Option B: Manual MCP Configuration
 
@@ -83,27 +72,29 @@ The first call may take a few seconds for JIT compilation; subsequent calls are 
 
 ## Architecture
 
-AgentREPL uses a **worker subprocess model** via Distributed.jl:
+AgentREPL uses a **multi-session worker subprocess model** via Distributed.jl:
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ Claude Code                                          │
-│   ↕ STDIO (MCP)                                      │
-│ ┌─────────────────────────────────────────────────┐ │
-│ │ AgentREPL MCP Server (Main Process)             │ │
-│ │   ↕ Distributed.jl                              │ │
-│ │ ┌─────────────────────────────────────────────┐ │ │
-│ │ │ Worker Process (code evaluation happens here)│ │ │
-│ │ └─────────────────────────────────────────────┘ │ │
-│ └─────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│ Claude Code                                             │
+│   ↕ STDIO (MCP)                                        │
+│ ┌─────────────────────────────────────────────────────┐ │
+│ │ AgentREPL MCP Server (Main Process)                 │ │
+│ │   ↕ Distributed.jl                                  │ │
+│ │ ┌──────────────────┐  ┌──────────────────┐          │ │
+│ │ │ Session "default" │  │ Session "testing" │  ...    │ │
+│ │ │ (Worker 2)        │  │ (Worker 3)        │         │ │
+│ │ └──────────────────┘  └──────────────────┘          │ │
+│ └─────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
 ```
 
 **Why a worker subprocess?**
 - `reset` can kill and respawn the worker for a **true hard reset**
 - Type/struct redefinitions work (impossible with in-process reset)
+- Each session has isolated variables, packages, and project environment
 - The activated environment persists across resets
-- Worker is spawned lazily on first use to avoid STDIO conflicts
+- Workers are spawned lazily on first use to avoid STDIO conflicts
 
 ## Tools Provided
 
@@ -191,6 +182,8 @@ Active Project: /home/user/MyProject
 User Variables: x, fib, data
 Loaded Modules: 42
 Worker ID: 3
+Session: default
+Revise.jl: loaded
 ```
 
 ### `activate`
@@ -278,6 +271,70 @@ log_viewer(mode="off")
 
 Useful for seeing printed output as it happens, especially for long-running computations.
 
+### `session`
+
+Manage multiple named Julia REPL sessions. Each session has its own worker process with isolated state.
+
+```
+session(action="create", name="analysis")
+# Session 'analysis' created and set as current.
+# Worker will spawn on first eval.
+
+session(action="list")
+# Sessions:
+#  * default — worker 2, /home/user/MyProject, Revise (5.2min)
+#    analysis — not spawned, default env, no Revise (0.1min)
+
+session(action="switch", name="analysis")
+# Switched to session 'analysis'.
+
+session(action="destroy", name="analysis")
+# Session 'analysis' destroyed.
+```
+
+**Actions:**
+| Action | Description | Name Required |
+|--------|-------------|---------------|
+| `create` | Create a new named session | Yes |
+| `switch` | Switch the active session | Yes |
+| `list` | Show all sessions with status | No |
+| `destroy` | Kill a session's worker and remove it | Yes |
+
+### `revise`
+
+Hot-reload Julia code changes using Revise.jl -- no session restart needed.
+
+```
+revise(action="revise")
+# Revise completed — all tracked changes reloaded.
+
+revise(action="track", path="src/myfile.jl")
+# Now tracking src/myfile.jl — changes will auto-reload on next revise().
+
+revise(action="includet", path="scripts/analysis.jl")
+# Included scripts/analysis.jl with Revise tracking.
+
+revise(action="status")
+# Revise.jl Status (session: default):
+# Watched packages: MyPackage
+# Tracked files: 3 files
+#   - src/core.jl
+#   - src/utils.jl
+#   - scripts/analysis.jl
+```
+
+**Actions:**
+| Action | Description | Path Required |
+|--------|-------------|---------------|
+| `revise` | Trigger Revise.revise() to pick up all file changes | No |
+| `track` | Start tracking a file (changes auto-detected) | Yes |
+| `includet` | Include a file with Revise tracking | Yes |
+| `status` | Show what Revise is currently tracking | No |
+
+Use `revise` after editing `.jl` files. Use `reset` only for struct layout changes (Julia < 1.12) or corrupted state.
+
+All tools except `log_viewer` and `session` accept an optional `session` parameter to target a specific session.
+
 ## Configuration
 
 ### Environment/Project Management
@@ -302,119 +359,69 @@ AgentREPL.start_server(project_dir="/path/to/your/project")
 
 The activated environment persists across `reset` calls.
 
-## Comparison with Alternatives
+## Choosing a Julia MCP Server
 
-### vs Auton.jl
+| | AgentREPL | Kaimon.jl | MCPRepl.jl |
+|---|---|---|---|
+| Transport | STDIO | HTTP (+ZMQ) | HTTP |
+| Network port | None | 2828 | 3000 |
+| Auto-start from Claude Code | Yes | No | No |
+| Dependencies | 5 (3 stdlib) | 30+ | Few |
+| Session isolation | Process-level (Distributed.jl) | Via Gate | Shared REPL |
+| Revise.jl integration | Auto-load + auto-revise hook | Manual | No |
+| True hard reset (type redef) | Yes | N/A | No |
+| Debugging (breakpoints, stepping) | No | Yes (VS Code) | No |
+| Semantic code search | No | Yes (Qdrant) | No |
+| Introspection tools | No (use `eval`) | Yes (dedicated) | No |
+| TUI dashboard | No | Yes | No |
+| Custom tool registration | No | Yes (GateTool) | No |
+| Plugin ecosystem (skills/hooks) | Yes | No | No |
+| Registry-eligible | Yes | No | No |
 
-[Auton.jl](https://github.com/AntonOresten/Auton.jl) provides LLM-augmented REPL modes for human-in-the-loop workflows.
+**Choose AgentREPL if** you want a zero-config Julia REPL that auto-starts when Claude Code needs it. No port, automatic Revise.jl hot-reloading, multi-session isolation. You value simplicity and security over feature breadth.
 
-| Aspect | AgentREPL | Auton.jl |
-|--------|-----------|----------|
-| Use case | AI agent automation | Human + LLM collaboration |
-| Operator | AI agent (autonomous) | Human at keyboard |
-| Interface | MCP tools (headless) | REPL modes (interactive) |
-| LLM integration | Claude Code built-in | PromptingTools.jl (any model) |
-| Setup | Plugin or one command | Startup.jl config |
+**Choose [Kaimon.jl](https://github.com/kahliburke/Kaimon.jl) if** you want a comprehensive Julia development environment with 35+ tools: debugging, semantic code search, macro expansion, code IR inspection, and a terminal dashboard. You're comfortable managing HTTP server startup and a larger dependency tree.
 
-**When to use Auton.jl**: You want LLM assistance while *you* work in the Julia REPL—context-aware suggestions, code generation, and iterative refinement with you in control.
+**Choose [MCPRepl.jl](https://github.com/hexaeder/MCPRepl.jl) if** you want a shared REPL where you and the AI agent see each other's commands in real-time.
 
-**When to use AgentREPL**: You want Claude Code to execute Julia code autonomously as part of a larger AI agent workflow, without requiring human presence at the REPL.
+AgentREPL deliberately does not include debugging, semantic search, introspection tools, a TUI, or custom tool registration. If you need those, Kaimon.jl provides them. AgentREPL's trade-off is that `eval` plus Julia's built-in introspection (e.g., `@code_typed`, `methodswith`, `supertypes` -- all callable via `eval`) covers most agent workflows with fewer moving parts.
 
-### vs ClaudeCodeSDK.jl
+### Related Tools
 
-[ClaudeCodeSDK.jl](https://github.com/AtelierArith/ClaudeCodeSDK.jl) is an SDK for calling Claude Code **from** Julia. It's the opposite direction of AgentREPL.
-
-| Aspect | AgentREPL | ClaudeCodeSDK.jl |
-|--------|-----------|------------------|
-| Direction | Claude → Julia | Julia → Claude |
-| Purpose | Claude runs Julia code | Julia calls Claude |
-| Use case | AI agent development | Automating Claude workflows |
-
-**When to use ClaudeCodeSDK.jl**: You want to call Claude programmatically from Julia scripts or applications.
-
-**When to use AgentREPL**: You want Claude Code to execute Julia code in a persistent session.
-
-### vs ModelContextProtocol.jl
-
-[ModelContextProtocol.jl](https://github.com/JuliaSMLM/ModelContextProtocol.jl) is the MCP framework that AgentREPL is built on. It provides the building blocks (`MCPTool`, `MCPResource`, `mcp_server`) for creating MCP servers.
-
-| Aspect | AgentREPL | ModelContextProtocol.jl |
-|--------|-----------|-------------------------|
-| Type | Ready-to-use MCP server | Framework for building servers |
-| Setup | One command | Write custom tools |
-| Flexibility | Julia REPL only | Any tools you want |
-
-**When to use ModelContextProtocol.jl**: You want to build custom MCP tools beyond code evaluation.
-
-**When to use AgentREPL**: You want persistent Julia evaluation without writing any MCP code.
-
-### vs MCPRepl.jl
-
-[MCPRepl.jl](https://github.com/hexaeder/MCPRepl.jl) is an excellent package that inspired AgentREPL. Key differences:
-
-| Aspect | AgentREPL | MCPRepl.jl |
-|--------|-----------|------------|
-| Transport | STDIO | HTTP |
-| Port required | No | Yes (:3000) |
-| Manual startup | No | Yes |
-| Shared REPL | No | Yes |
-| Registry status | Eligible | Not eligible (security) |
-
-**When to use MCPRepl.jl**: If you want to share a REPL with the AI agent (see each other's commands).
-
-**When to use AgentREPL**: If you want auto-start, no network port, or plan to distribute via Julia registry.
-
-### vs REPLicant.jl
-
-[REPLicant.jl](https://github.com/MichaelHatherly/REPLicant.jl) uses TCP sockets with a custom protocol (not MCP).
-
-| Aspect | AgentREPL | REPLicant.jl |
-|--------|-----------|--------------|
-| Protocol | MCP (standard) | Custom |
-| Integration | `claude mcp add` | `just`/`nc` commands |
-| Port required | No | Yes |
-
-**When to use REPLicant.jl**: If you're using `just` for task automation.
-
-**When to use AgentREPL**: If you want standard MCP integration with Claude Code.
-
-### vs DaemonMode.jl
-
-[DaemonMode.jl](https://github.com/dmolina/DaemonMode.jl) is a client-daemon system for running Julia scripts faster.
-
-| Aspect | AgentREPL | DaemonMode.jl |
-|--------|-----------|---------------|
-| Protocol | MCP | Custom |
-| Port required | No | Yes (:3000) |
-| Julia 1.10+ | Yes | Broken |
-| AI integration | Native | Requires wrapper |
-
-**When to use DaemonMode.jl**: For general script acceleration (if using older Julia).
-
-**When to use AgentREPL**: For AI agent integration with modern Julia.
+- [Auton.jl](https://github.com/AntonOresten/Auton.jl) -- LLM-augmented REPL modes for human-in-the-loop Julia development
+- [ClaudeCodeSDK.jl](https://github.com/AtelierArith/ClaudeCodeSDK.jl) -- Call Claude Code from Julia (opposite direction)
+- [ModelContextProtocol.jl](https://github.com/JuliaSMLM/ModelContextProtocol.jl) -- The MCP framework AgentREPL is built on
+- [ClaudeCodeJuliaLSP](https://github.com/Piebald-AI/claude-code-lsps) -- Code intelligence (diagnostics, go-to-definition) for Claude Code
+- [juliadoc-mcp](https://github.com/jonathanfischer97/juliadoc-mcp) -- Julia documentation lookup via MCP
+- [REPLicant.jl](https://github.com/MichaelHatherly/REPLicant.jl) -- TCP-based Julia REPL with custom protocol
 
 ## Claude Code Plugin
 
-The `claude-plugin/` directory contains a ready-to-use Claude Code plugin that provides:
+The `claude-plugin/` directory contains a ready-to-use Claude Code plugin.
 
 ### Auto-configured MCP Server
 No need to manually run `claude mcp add`. The plugin configures the Julia MCP server automatically.
 
-### Slash Commands
-| Command | Description |
-|---------|-------------|
-| `/julia-reset` | Kill and respawn the Julia worker (hard reset) |
-| `/julia-info` | Show session information |
-| `/julia-pkg <action> [packages]` | Package management |
-| `/julia-activate <path>` | Activate a project/environment |
+### Skills
 
-### Best Practices Skill
-The included skill teaches Claude:
-- Always display code before calling `eval` (for readable permission prompts)
-- First-time environment setup dialogue
-- When to use hard reset vs. continuing
-- Testing and development workflows
-- Error handling patterns
+**User-invoked:**
+| Skill | Description |
+|-------|-------------|
+| `/julia:julia-reset` | Kill and respawn the Julia worker (hard reset) |
+| `/julia:julia-info` | Show session information |
+| `/julia:julia-pkg <action> [packages]` | Package management |
+| `/julia:julia-activate <path>` | Activate a project/environment |
+| `/julia:julia-log <mode>` | Control log viewer |
+| `/julia:julia-session <action> [name]` | Manage multiple sessions |
+| `/julia:julia-revise [action] [path]` | Hot-reload code changes |
+| `/julia:julia-develop [path]` | Set up development workflow |
+
+**Auto-triggering:** `julia-evaluation` (best practices for REPL usage) and `julia-language` (deep Julia expertise: types, dispatch, metaprogramming, performance).
+
+### Hooks
+
+- **PreToolUse (eval)**: Validates that Julia code is displayed in a readable format before calling eval
+- **PostToolUse (Write/Edit)**: Automatically calls `revise` after editing `.jl` files to hot-reload changes
 
 ### Installation
 ```bash
@@ -479,8 +486,8 @@ AgentREPL.start_server(project_dir="/path/to/myproject")
 | `JULIA_REPL_PROJECT` | Path to Julia project to activate on startup | None |
 | `JULIA_REPL_VIEWER` | Log viewer mode: `auto`, `tmux`, `file`, `none` | `none` |
 | `JULIA_REPL_LOG` | Path to log file | `~/.julia/logs/repl.log` |
-
-For visual output, set `JULIA_REPL_VIEWER=auto` to open a terminal showing real-time Julia output.
+| `JULIA_REPL_HIGHLIGHT` | Enable/disable syntax highlighting | `true` |
+| `JULIA_REPL_OUTPUT_FORMAT` | Output format: `ansi`, `markdown`, `plain` | `ansi` |
 
 ### Internal Architecture
 
@@ -490,28 +497,32 @@ For developers extending AgentREPL:
 ```
 src/
   AgentREPL.jl           # Main module (imports, includes, exports)
-  types.jl               # State structs (WorkerState, LogViewerState, etc.)
+  types.jl               # State structs (SessionState, SessionRegistry, LogViewerState, HighlightConfig)
+  highlighting.jl        # Julia syntax highlighting (JuliaSyntaxHighlighting.jl)
   formatting.jl          # Result formatting, stacktrace truncation
+  sessions.jl            # Multi-session lifecycle (create, switch, list, destroy)
   worker.jl              # Distributed worker lifecycle
+  revise.jl              # Revise.jl integration (revise, track, includet, status)
   packages.jl            # Pkg actions, project activation
   logging.jl             # Log viewer functionality
-  tools.jl               # MCP tool definitions
+  tools.jl               # MCP tool definitions (8 tools)
   server.jl              # start_server function
-  deprecated/
-    tmux.jl              # Deprecated tmux bidirectional REPL
 ```
 
 **Key Components:**
 
 | Component | File | Description |
 |-----------|------|-------------|
-| `WorkerState` | types.jl | Manages worker subprocess ID and project path |
-| `LogViewerState` | types.jl | Manages optional log viewer terminal |
-| `TmuxREPLState` | types.jl | State for deprecated tmux mode |
-| `ensure_worker!()` | worker.jl | Ensures worker exists, spawns if needed |
-| `capture_eval_on_worker(code)` | worker.jl | Evaluates code with output capture |
-| `reset_worker!()` | worker.jl | Kills and respawns worker |
-| `activate_project_on_worker!(path)` | packages.jl | Switches worker environment |
+| `SessionState` | types.jl | Per-session state: worker ID, project path, Revise status |
+| `SessionRegistry` | types.jl | Registry of all sessions with current-session tracking |
+| `LogViewerState` | types.jl | Optional log viewer terminal state |
+| `HighlightConfig` | types.jl | Syntax highlighting configuration |
+| `ensure_worker!(session)` | worker.jl | Ensures worker exists for a session |
+| `capture_eval_on_worker(code; session_name)` | worker.jl | Evaluates code with output capture |
+| `reset_worker!(session)` | worker.jl | Kills and respawns a session's worker |
+| `resolve_session(name)` | sessions.jl | Resolves optional session name to SessionState |
+| `revise_on_worker!(session)` | revise.jl | Triggers Revise.revise() on worker |
+| `activate_project_on_worker!(path; session_name)` | packages.jl | Switches worker environment |
 
 All functions have docstrings accessible via `?function_name` in the Julia REPL.
 
@@ -535,5 +546,6 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on:
 
 - [ModelContextProtocol.jl](https://github.com/JuliaSMLM/ModelContextProtocol.jl) - MCP framework
 - [MCPRepl.jl](https://github.com/hexaeder/MCPRepl.jl) - Inspiration and prior art
+- [Kaimon.jl](https://github.com/kahliburke/Kaimon.jl) - Comprehensive Julia agent toolkit
 - [REPLicant.jl](https://github.com/MichaelHatherly/REPLicant.jl) - Alternative approach
 - [Modern Julia Workflows](https://modernjuliaworkflows.org/) - Best practices guide
