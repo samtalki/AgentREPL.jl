@@ -21,10 +21,8 @@ is no longer in `workers()`).
 function _handle_worker_crash!(session::SessionState, e)
     if e isa Distributed.ProcessExitedException
         _clear_worker_state!(session)
-    elseif e isa Distributed.RemoteException
-        if session.worker_id !== nothing && !(session.worker_id in workers())
-            _clear_worker_state!(session)
-        end
+    elseif session.worker_id !== nothing && !(session.worker_id in workers())
+        _clear_worker_state!(session)
     end
 end
 
@@ -58,8 +56,9 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
             remotecall_fetch(Core.eval, session.worker_id, Main, :(using Pkg))
         catch e
             @warn "Failed to load Pkg on worker, killing half-initialized worker" session=session.name exception=(e, catch_backtrace())
+            orphan_id = session.worker_id
             _clear_worker_state!(session)
-            try; rmprocs(session.worker_id); catch; end
+            try; rmprocs(orphan_id); catch; end
             rethrow()
         end
 
@@ -224,14 +223,10 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
             try
                 value_str, output, error_str = remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
             catch e
-                if e isa Distributed.ProcessExitedException
-                    _handle_worker_crash!(session, e)
-                    value_str = "nothing"
-                    output = ""
-                    error_str = "Worker process crashed. It will respawn on next eval. Error: $(sprint(showerror, e))"
-                else
-                    rethrow()
-                end
+                _handle_worker_crash!(session, e)
+                value_str = "nothing"
+                output = ""
+                error_str = sprint(showerror, e)
             end
         else
             # With timeout: race remotecall against a cancellable Timer
@@ -247,12 +242,11 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
             @async begin
                 try
                     result = fetch(future)
-                    put!(result_channel, (:ok, result))
+                    isopen(result_channel) && put!(result_channel, (:ok, result))
                 catch e
                     try
-                        put!(result_channel, (:error, e))
-                    catch put_err
-                        @warn "Failed to report async eval error (channel may be closed)" exception=(e, catch_backtrace())
+                        isopen(result_channel) && put!(result_channel, (:error, e))
+                    catch
                     end
                 end
             end

@@ -174,7 +174,7 @@ Returns the log file path if logging is enabled.
 function setup_log_viewer!(; mode::Symbol=:auto, log_path::Union{String,Nothing}=nothing)
     # Close existing log if open
     if LOG_VIEWER.log_io !== nothing
-        close(LOG_VIEWER.log_io)
+        try; close(LOG_VIEWER.log_io); catch; end
         LOG_VIEWER.log_io = nothing
     end
 
@@ -285,10 +285,13 @@ Close the log viewer and clean up.
 """
 function close_log_viewer!()
     if LOG_VIEWER.log_io !== nothing
-        println(LOG_VIEWER.log_io, "\n", "="^60)
-        println(LOG_VIEWER.log_io, "Session ended - $(Dates.now())")
-        println(LOG_VIEWER.log_io, "="^60)
-        close(LOG_VIEWER.log_io)
+        try
+            println(LOG_VIEWER.log_io, "\n", "="^60)
+            println(LOG_VIEWER.log_io, "Session ended - $(Dates.now())")
+            println(LOG_VIEWER.log_io, "="^60)
+            close(LOG_VIEWER.log_io)
+        catch
+        end
         LOG_VIEWER.log_io = nothing
     end
 
