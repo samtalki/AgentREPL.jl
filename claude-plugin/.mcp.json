@@ -8,8 +8,7 @@
       ],
       "env": {
         "JULIA_REPL_HIGHLIGHT": "true",
-        "JULIA_REPL_OUTPUT_FORMAT": "ansi",
-        "JULIA_REPL_PROJECT": "${JULIA_REPL_PROJECT}"
+        "JULIA_REPL_OUTPUT_FORMAT": "ansi"
       }
     }
   }
