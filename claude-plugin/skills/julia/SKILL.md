@@ -176,6 +176,17 @@ The `reset` tool **kills the worker process and spawns a fresh one**. This means
 After reset, packages need to be reloaded with `using`.
 The activated environment persists across resets.
 
+## Plotting & Visualization
+
+UnicodePlots.jl renders terminal-native plots directly in eval output — no GUI needed:
+
+```julia
+using UnicodePlots
+lineplot(sin, -2π, 2π, title="Sine Wave")
+```
+
+Plots appear as colored Unicode Braille art in the tool response. Supports line, scatter, bar, histogram, heatmap, density, contour, box plots, and more. Use `/julia-plot` for the full reference.
+
 ## Environment Management
 
 Julia best practice is to use project-specific environments. Use `activate` to switch:

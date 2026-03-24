@@ -395,6 +395,25 @@ end
     end
 end
 
+@testset "UnicodePlots Rendering" begin
+    @testset "Plot renders with color and Braille characters" begin
+        value_str, output, error_str, _ = AgentREPL.capture_eval_on_worker("using UnicodePlots; lineplot(1:10)")
+        @test error_str === nothing
+        # Should contain Braille characters (plot area uses U+2800 block)
+        @test any(c -> '\u2800' <= c <= '\u28FF', value_str)
+        # Should contain box-drawing characters (plot border)
+        @test contains(value_str, "┌") || contains(value_str, "└")
+        # Should contain ANSI escape codes (colored output)
+        @test contains(value_str, "\e[")
+    end
+
+    @testset "Scatterplot renders" begin
+        value_str, _, error_str, _ = AgentREPL.capture_eval_on_worker("scatterplot([1,2,3,4,5], [1,4,9,16,25])")
+        @test error_str === nothing
+        @test any(c -> '\u2800' <= c <= '\u28FF', value_str)
+    end
+end
+
 @testset "Tool Validation Helpers" begin
     @testset "_validate_action" begin
         @test AgentREPL._validate_action(Dict("action" => "ADD"), ["add", "rm"]) == "add"

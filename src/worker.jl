@@ -174,8 +174,11 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
     worker_id = ensure_worker!(session)
     session.last_used = time()
 
+    # Pass color preference to worker so repr uses ANSI for color-aware types (UnicodePlots, etc.)
+    use_color = is_highlighting_enabled() && get_output_format() == :ansi
+
     eval_expr = quote
-        let code_str = $code
+        let code_str = $code, _use_color = $use_color
             (_eval_value, _eval_err, _eval_bt), stdout_content, stderr_content = $(_with_output_capture(quote
                 _eval_value = nothing
                 _eval_err = nothing
@@ -196,7 +199,11 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
 
             error_str = _eval_err === nothing ? nothing : sprint(showerror, _eval_err, _eval_bt)
             value_str = try
-                repr(_eval_value)
+                if _use_color
+                    sprint(io -> show(IOContext(io, :color => true, :compact => true, :limit => true), MIME"text/plain"(), _eval_value))
+                else
+                    repr(_eval_value)
+                end
             catch repr_err
                 try
                     string(_eval_value)
