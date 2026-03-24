@@ -1,4 +1,4 @@
-# formatting.jl - Result formatting, sparklines, and stacktrace truncation
+# formatting.jl - Result formatting and stacktrace truncation
 
 const SPARKLINE_BLOCKS = ['▁','▂','▃','▄','▅','▆','▇','█']
 

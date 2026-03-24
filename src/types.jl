@@ -13,7 +13,7 @@ project environment, and Revise.jl tracking state.
 - `revise_loaded::Bool`: Whether Revise.jl was successfully loaded on the worker
 - `created_at::Float64`: Session creation time (from `time()`)
 - `last_used::Float64`: Last time this session was used (from `time()`)
-- `eval_timings::Vector{Float64}`: Ring buffer of recent eval durations (capped at 50)
+- `eval_timings::Vector{Float64}`: Ring buffer of recent eval durations (capped at `MAX_EVAL_TIMINGS`)
 """
 mutable struct SessionState
     const name::String
@@ -30,6 +30,8 @@ mutable struct SessionState
         new(name, worker_id, project_path, revise_loaded, now, now, Float64[])
     end
 end
+
+const MAX_EVAL_TIMINGS = 50
 
 """
     SessionRegistry

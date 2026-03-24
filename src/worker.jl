@@ -273,7 +273,7 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
     end
 
     push!(session.eval_timings, elapsed)
-    length(session.eval_timings) > 50 && popfirst!(session.eval_timings)
+    length(session.eval_timings) > MAX_EVAL_TIMINGS && popfirst!(session.eval_timings)
 
     return (value_str, output, error_str, elapsed)
 end

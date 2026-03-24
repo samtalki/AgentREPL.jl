@@ -245,8 +245,9 @@ Returns:
                 else
                     n = length(session.eval_timings)
                     sorted = sort(session.eval_timings)
-                    med = sorted[div(n + 1, 2)]
-                    mx = maximum(session.eval_timings)
+                    mid = div(n, 2)
+                    med = isodd(n) ? sorted[mid + 1] : (sorted[mid] + sorted[mid + 1]) / 2
+                    mx = sorted[end]
                     spark = sparkline(session.eval_timings)
                     "Eval Timings ($n evals): $spark  median $(format_elapsed(med)), max $(format_elapsed(mx))\n"
                 end

@@ -451,18 +451,17 @@ end
         @test all(t -> t > 0, session.eval_timings)
     end
 
-    @testset "eval_timings cap at 50" begin
+    @testset "eval_timings cap at MAX_EVAL_TIMINGS" begin
         session = AgentREPL.get_current_session!()
         empty!(session.eval_timings)
-        for i in 1:55
-            push!(session.eval_timings, Float64(i))
-        end
-        # Simulate the cap logic from capture_eval_on_worker
-        while length(session.eval_timings) > 50
-            popfirst!(session.eval_timings)
-        end
-        @test length(session.eval_timings) == 50
-        @test session.eval_timings[1] == 6.0  # first 5 were popped
+        # Pre-fill to just under cap
+        append!(session.eval_timings, fill(0.001, AgentREPL.MAX_EVAL_TIMINGS - 1))
+        # One real eval brings it to exactly MAX
+        AgentREPL.capture_eval_on_worker("1+1")
+        @test length(session.eval_timings) == AgentREPL.MAX_EVAL_TIMINGS
+        # Another real eval should evict the oldest pre-filled entry
+        AgentREPL.capture_eval_on_worker("2+2")
+        @test length(session.eval_timings) == AgentREPL.MAX_EVAL_TIMINGS
     end
 
     @testset "reset clears timings" begin
