@@ -472,8 +472,8 @@ The log file is written to ~/.julia/logs/repl.log by default.
             ToolParameter(
                 name = "mode",
                 type = "string",
-                description = "Viewer mode: 'auto', 'tmux', 'file', or 'off'",
-                required = true
+                description = "Viewer mode: 'auto' (default), 'tmux', 'file', or 'off'",
+                required = false
             )
         ],
         handler = params -> begin

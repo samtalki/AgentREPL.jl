@@ -1,6 +1,6 @@
 name = "AgentREPL"
 uuid = "c6b0b931-bd15-49f6-a31f-cf7d80eb5e81"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["Samuel Talkington <talkington@pm.me>"]
 
 [deps]
