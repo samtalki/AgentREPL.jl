@@ -315,9 +315,9 @@ end
 
     @testset "Activate nonexistent path" begin
         result = AgentREPL.activate_project_on_worker!("/nonexistent/project/path")
-        # Pkg.activate with a nonexistent path may create a new env or error depending on Julia version
-        # Either way it should not throw
+        # Pkg.activate with a nonexistent path may create a new env or succeed depending on Julia version
         @test result isa NamedTuple
+        @test haskey(result, :success)
     end
 
     @testset "Session project_path updated on success" begin
@@ -379,6 +379,7 @@ end
         result = AgentREPL.run_pkg_action_on_worker("test", String[])
         # Either succeeds or returns error in the result (not thrown)
         @test result isa NamedTuple
+        @test haskey(result, :error)
     end
 
     @testset "Develop action requires valid path" begin
@@ -391,6 +392,22 @@ end
         # Trying to free a package that's not developed should error
         result = AgentREPL.run_pkg_action_on_worker("free", ["NonExistentPackage12345"])
         @test result.error !== nothing
+    end
+end
+
+@testset "Tool Validation Helpers" begin
+    @testset "_validate_action" begin
+        @test AgentREPL._validate_action(Dict("action" => "ADD"), ["add", "rm"]) == "add"
+        @test AgentREPL._validate_action(Dict("action" => " status "), ["status"]) == "status"
+        @test_throws ArgumentError AgentREPL._validate_action(Dict("action" => "invalid"), ["add", "rm"])
+        @test_throws ArgumentError AgentREPL._validate_action(Dict{String,Any}(), ["add"])
+        @test_throws ArgumentError AgentREPL._validate_action(Dict("action" => 123), ["add"])
+    end
+
+    @testset "_require_string_param" begin
+        @test AgentREPL._require_string_param(Dict("name" => " test "), "name", "create") == "test"
+        @test_throws ArgumentError AgentREPL._require_string_param(Dict{String,Any}(), "name", "create")
+        @test_throws ArgumentError AgentREPL._require_string_param(Dict("name" => 123), "name", "create")
     end
 end
 

@@ -123,6 +123,8 @@ Use `revise(action="revise")` after editing .jl files to hot-reload changes with
                                         elapsed=elapsed, max_output=max_output, max_stackframes=max_stackframes)
                 TextContent(text = result)
             catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
                 TextContent(text = "Internal error in eval tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
             end
         end
@@ -180,6 +182,8 @@ Session reset complete.
 
                 TextContent(text = msg)
             catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
                 TextContent(text = "Internal error in reset tool: $(sprint(showerror, e))")
             end
         end
@@ -245,6 +249,8 @@ Worker ID: $(session.worker_id)
 """
                 TextContent(text = msg)
             catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
                 TextContent(text = "Internal error in info tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
             end
         end
@@ -366,6 +372,8 @@ Examples:
 
                 TextContent(text = join(result_parts, ""))
             catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
                 if e isa ArgumentError
                     TextContent(text = "Error: $(e.msg)")
                 else
@@ -429,6 +437,8 @@ After activation, use `pkg(action="instantiate")` to install dependencies.
                     TextContent(text = "Error activating project: $(result.error)")
                 end
             catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
                 TextContent(text = "Internal error in activate tool: $(sprint(showerror, e))\n\nTry reset() to recover.")
             end
         end
@@ -486,6 +496,8 @@ The log file is written to ~/.julia/logs/repl.log by default.
                     TextContent(text = "Log viewer enabled.\nLog file: $path\nRun in another terminal: tail -f $path")
                 end
             catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
                 TextContent(text = "Internal error in log_viewer tool: $(sprint(showerror, e))")
             end
         end
@@ -582,6 +594,8 @@ Examples:
                     error("Unexpected action: $action_lower")
                 end
             catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
                 if e isa ArgumentError
                     TextContent(text = "Error: $(e.msg)")
                 else
@@ -656,17 +670,20 @@ Examples:
                 if action_lower == "revise"
                     ensure_worker!(session)
                     result = revise_on_worker!(session)
-                    TextContent(text = result.message)
+                    msg = result.success ? result.message : "Error: $(result.message)"
+                    TextContent(text = msg)
 
                 elseif action_lower == "track"
                     ensure_worker!(session)
                     result = track_file_on_worker!(session, path)
-                    TextContent(text = result.message)
+                    msg = result.success ? result.message : "Error: $(result.message)"
+                    TextContent(text = msg)
 
                 elseif action_lower == "includet"
                     ensure_worker!(session)
                     result = includet_on_worker!(session, path)
-                    TextContent(text = result.message)
+                    msg = result.success ? result.message : "Error: $(result.message)"
+                    TextContent(text = msg)
 
                 elseif action_lower == "status"
                     status = get_revise_status(session)
@@ -693,6 +710,8 @@ Examples:
                     error("Unexpected action: $action_lower")
                 end
             catch e
+                e isa InterruptException && rethrow()
+                e isa OutOfMemoryError && rethrow()
                 if e isa ArgumentError
                     TextContent(text = "Error: $(e.msg)")
                 else

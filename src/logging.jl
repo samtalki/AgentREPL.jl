@@ -125,7 +125,7 @@ function try_open_terminal_viewer(log_path::String)
 
     # Use less +F for scrollable output with ANSI color support
     # Ctrl+C to pause and scroll, Shift+F to resume following
-    less_cmd = "less -R +F '$log_path'"
+    less_cmd = "less -R +F $(Base.shell_escape(log_path))"
 
     try
         if Sys.isapple()
@@ -274,6 +274,7 @@ function log_interaction(code::String, value_str::String, output::String, error_
         @warn "Log viewer write failed, disabling" exception=e
         try; close(LOG_VIEWER.log_io); catch; end
         LOG_VIEWER.log_io = nothing
+        LOG_VIEWER.mode = :none
     end
 end
 

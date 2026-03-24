@@ -144,6 +144,9 @@ function _cleanup_all_workers!()
     catch e
         try; println(stderr, "AgentREPL: failed to clean up workers $ids: ", sprint(showerror, e)); catch; end
     end
+    for (_, s) in SESSIONS.sessions
+        _clear_worker_state!(s)
+    end
     try
         close_log_viewer!()
     catch e

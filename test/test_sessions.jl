@@ -53,6 +53,14 @@ end
         @test_throws ErrorException AgentREPL.resolve_session("nonexistent-session-xyz")
     end
 
+    @testset "Destroy nonexistent session throws" begin
+        @test_throws ErrorException AgentREPL.destroy_session!("nonexistent-session-xyz")
+    end
+
+    @testset "SessionState empty name throws" begin
+        @test_throws ErrorException AgentREPL.SessionState("", nothing, nothing)
+    end
+
     @testset "List sessions" begin
         sessions = AgentREPL.list_sessions()
         @test length(sessions) >= 2

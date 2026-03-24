@@ -1,29 +1,49 @@
 # worker.jl - Distributed worker lifecycle management
 
 """
+    _clear_worker_state!(session::SessionState)
+
+Clear worker-related fields on a session. Centralizes the paired reset of
+`worker_id` and `revise_loaded` so every call site stays consistent.
+"""
+function _clear_worker_state!(session::SessionState)
+    session.worker_id = nothing
+    session.revise_loaded = false
+end
+
+"""
     _handle_worker_crash!(session::SessionState, e)
 
-Reset session worker state if `e` is a `ProcessExitedException`.
-Centralizes crash cleanup so all `remotecall_fetch` call sites stay consistent.
+Reset session worker state if `e` indicates a dead worker.
+Handles both `ProcessExitedException` and `RemoteException` (when the worker
+is no longer in `workers()`).
 """
 function _handle_worker_crash!(session::SessionState, e)
     if e isa Distributed.ProcessExitedException
-        session.worker_id = nothing
-        session.revise_loaded = false
+        _clear_worker_state!(session)
+    elseif e isa Distributed.RemoteException
+        if session.worker_id !== nothing && !(session.worker_id in workers())
+            _clear_worker_state!(session)
+        end
     end
 end
 
 """
-    ensure_worker!(session::SessionState) -> Int
+    ensure_worker!(session::SessionState; _retry_without_revise::Bool=false) -> Int
 
 Ensure a worker process exists for the given session, creating one if needed.
 Returns the worker ID. Also attempts to load Revise.jl on the worker.
+
+The `_retry_without_revise` flag is internal — it prevents unbounded recursion
+when Revise.jl consistently crashes the worker process.
 """
-function ensure_worker!(session::SessionState)
+function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false)
     if session.worker_id === nothing || !(session.worker_id in workers())
         project_dir = try
             dirname(Pkg.project().path)
-        catch
+        catch e
+            e isa InterruptException && rethrow()
+            e isa OutOfMemoryError && rethrow()
             error("Cannot determine project directory for session '$(session.name)'. Ensure Julia is started with --project=<path>.")
         end
         new_workers = try
@@ -34,25 +54,33 @@ function ensure_worker!(session::SessionState)
         session.worker_id = first(new_workers)
 
         # Core.eval avoids closure serialization issues with remotecall
-        remotecall_fetch(Core.eval, session.worker_id, Main, :(using Pkg))
-
         try
-            remotecall_fetch(Core.eval, session.worker_id, Main, :(using Revise))
-            session.revise_loaded = true
+            remotecall_fetch(Core.eval, session.worker_id, Main, :(using Pkg))
         catch e
-            session.revise_loaded = false
-            if e isa Distributed.RemoteException || e isa Distributed.ProcessExitedException
-                @warn "Worker may have crashed while loading Revise.jl" session=session.name exception=(e, catch_backtrace())
-            else
-                @warn "Unexpected error loading Revise.jl on worker" session=session.name exception=(e, catch_backtrace())
-            end
+            @warn "Failed to load Pkg on worker, killing half-initialized worker" session=session.name exception=(e, catch_backtrace())
+            _clear_worker_state!(session)
+            try; rmprocs(session.worker_id); catch; end
+            rethrow()
         end
 
-        # If Revise loading crashed the worker, respawn
-        if session.worker_id !== nothing && !(session.worker_id in workers())
-            session.worker_id = nothing
-            session.revise_loaded = false
-            return ensure_worker!(session)
+        if !_retry_without_revise
+            try
+                remotecall_fetch(Core.eval, session.worker_id, Main, :(using Revise))
+                session.revise_loaded = true
+            catch e
+                session.revise_loaded = false
+                if e isa Distributed.RemoteException || e isa Distributed.ProcessExitedException
+                    @warn "Worker may have crashed while loading Revise.jl" session=session.name exception=(e, catch_backtrace())
+                else
+                    @warn "Unexpected error loading Revise.jl on worker" session=session.name exception=(e, catch_backtrace())
+                end
+            end
+
+            # If Revise loading crashed the worker, respawn once without Revise
+            if session.worker_id !== nothing && !(session.worker_id in workers())
+                _clear_worker_state!(session)
+                return ensure_worker!(session; _retry_without_revise=true)
+            end
         end
 
         if session.project_path !== nothing
@@ -86,8 +114,7 @@ function kill_worker!(session::SessionState)
             try; interrupt(session.worker_id); catch; end
         end
     end
-    session.worker_id = nothing
-    session.revise_loaded = false
+    _clear_worker_state!(session)
 end
 
 """
