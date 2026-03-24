@@ -79,3 +79,7 @@ contourplot(-3:0.1:3, -3:0.1:3, (x, y) -> exp(-(x^2 + y^2)))
 - **Compact mode**: Use `compact=true` to reduce margins when space is tight.
 - **Labels**: All plots support `title`, `xlabel`, `ylabel`, `name` (legend entry).
 - **Unicode output**: Plots use Braille characters for high resolution — they work in any Unicode terminal.
+
+## Displaying Plots
+
+After calling eval with plotting code, **always paste the plot output into your response** inside a plain code block. MCP tool results are collapsed by default in Claude Code — the user cannot see the plot unless you include it in your response text. This applies to all visual output: plots, heatmaps, density maps, bar charts, etc.
