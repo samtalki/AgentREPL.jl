@@ -71,7 +71,7 @@ det(A)
 
 ### After Evaluation: Display Rich Output
 
-MCP tool results are collapsed by default in Claude Code — the user cannot see eval output unless you include it in your response. When eval returns **rich visual output** (plots, tables, matrices, DataFrames, multi-line structured data), paste the complete output into your response inside a plain code block. Do NOT paste simple scalars (numbers, booleans, nothing) or error messages — those are visible in the collapsed summary.
+MCP tool results are collapsed by default in Claude Code — the user cannot see eval output unless you include it in your response. When eval returns **rich visual output** (plots, tables, matrices, DataFrames, multi-line structured data), paste the complete output directly into your response as raw text (NOT in a code block) so ANSI terminal colors are preserved. Do NOT paste simple scalars (numbers, booleans, nothing) or error messages — those are visible in the collapsed summary.
 
 ### Format Results Beautifully
 

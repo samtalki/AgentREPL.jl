@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "If the eval result contains rich visual output — Unicode plots (Braille characters ⠀-⣿), tables, matrices, DataFrames, or multi-line structured output — paste the complete output into your response inside a plain code block so the user can see it directly without expanding the tool result. Do NOT paste simple scalar results (numbers, short strings, booleans, nothing) or error messages — those are already visible in the collapsed tool result summary."
+            "prompt": "If the eval result contains rich visual output — Unicode plots (Braille characters ⠀-⣿), tables, matrices, DataFrames, or multi-line structured output — paste the complete output directly into your response as raw text (NOT inside a code block) so ANSI terminal colors are preserved. Do NOT paste simple scalar results (numbers, short strings, booleans, nothing) or error messages."
           }
         ]
       }
