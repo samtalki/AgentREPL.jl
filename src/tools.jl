@@ -29,7 +29,7 @@ function _require_string_param(params, name::String, action::String)
     if val === nothing || !isa(val, AbstractString)
         throw(ArgumentError("'$name' parameter is required for action '$action'"))
     end
-    return strip(val)
+    return String(strip(val))
 end
 
 """

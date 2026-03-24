@@ -1,14 +1,14 @@
 # Security Considerations
 
-This document describes the security model of AgentEval.jl and its implications.
+This document describes the security model of AgentREPL.jl and its implications.
 
 ## Transport Security
 
-AgentEval uses **STDIO transport exclusively**. This is a deliberate design choice for security:
+AgentREPL uses **STDIO transport exclusively**. This is a deliberate design choice for security:
 
 ### Why STDIO is More Secure Than HTTP/TCP
 
-| Risk | HTTP/TCP Servers | STDIO (AgentEval) |
+| Risk | HTTP/TCP Servers | STDIO (AgentREPL) |
 |------|------------------|-------------------|
 | Network access | Exposed on port | **Not applicable** |
 | Remote attacks | Possible | **Not possible** |
@@ -18,7 +18,7 @@ AgentEval uses **STDIO transport exclusively**. This is a deliberate design choi
 
 ### How STDIO Works
 
-1. The MCP client (Claude Code) spawns AgentEval as a subprocess
+1. The MCP client (Claude Code) spawns AgentREPL as a subprocess
 2. Communication happens via stdin/stdout pipes
 3. No network sockets are opened
 4. The Julia process inherits the user's permissions
@@ -31,15 +31,15 @@ This architecture means:
 
 ## Code Execution
 
-AgentEval evaluates arbitrary Julia code. This is by design - it's the core functionality for AI agent workflows.
+AgentREPL evaluates arbitrary Julia code. This is by design - it's the core functionality for AI agent workflows.
 
-### What AgentEval Protects Against
+### What AgentREPL Protects Against
 
 - **TTFX overhead** - Solved by persistent session
 - **Process isolation** - Each Claude session gets its own Julia process
 - **Output capture** - Stdout/stderr are captured and returned, not leaked
 
-### What AgentEval Does NOT Protect Against
+### What AgentREPL Does NOT Protect Against
 
 | Risk | Status | Mitigation |
 |------|--------|------------|
@@ -51,11 +51,11 @@ AgentEval evaluates arbitrary Julia code. This is by design - it's the core func
 
 ### The AI Trust Model
 
-AgentEval trusts the MCP client to send reasonable code. In practice:
+AgentREPL trusts the MCP client to send reasonable code. In practice:
 
-1. **Claude Code decides what code to run** - AgentEval executes it
+1. **Claude Code decides what code to run** - AgentREPL executes it
 2. **The user reviews AI suggestions** - Claude shows code before running
-3. **Permissions flow from user** - AgentEval runs with user's permissions
+3. **Permissions flow from user** - AgentREPL runs with user's permissions
 
 This is similar to running `julia -e "..."` manually - the code runs with your permissions.
 
@@ -76,9 +76,9 @@ The [kahliburke fork](https://github.com/kahliburke/MCPRepl.jl) adds security fe
 
 However, it still opens a network port.
 
-### AgentEval Security Model
+### AgentREPL Security Model
 
-AgentEval avoids these issues by not opening any network port:
+AgentREPL avoids these issues by not opening any network port:
 
 ```
 MCPRepl.jl:
@@ -86,7 +86,7 @@ MCPRepl.jl:
                               ↑
                    Attack surface exists
 
-AgentEval:
+AgentREPL:
   [Claude Code] ⟷ [stdin/stdout] ⟷ [Julia]
                         ↑
               No network attack surface
@@ -96,33 +96,33 @@ AgentEval:
 
 ### For Development Use
 
-AgentEval is designed for local development workflows:
+AgentREPL is designed for local development workflows:
 
 ```bash
 # This is the intended use case
-claude mcp add julia-eval -- julia --project=/path/to/AgentEval.jl ...
+claude mcp add julia-repl -- julia --project=/path/to/AgentREPL.jl ...
 ```
 
 ### For Production/Shared Environments
 
-If you need to run AgentEval in a shared or production environment:
+If you need to run AgentREPL in a shared or production environment:
 
 1. **Use containers** - Run Julia in a Docker container with limited permissions
 2. **Use seccomp/AppArmor** - Restrict system calls available to Julia
-3. **Monitor execution** - Log all code executed via AgentEval
+3. **Monitor execution** - Log all code executed via AgentREPL
 4. **Set resource limits** - Use ulimit or cgroups to limit CPU/memory
 5. **Sanitize environment** - Remove sensitive environment variables
 
 ### Things to Avoid
 
-- **Don't expose AgentEval to the network** - It's designed for local use
+- **Don't expose AgentREPL to the network** - It's designed for local use
 - **Don't run with elevated permissions** - Use a regular user account
 - **Don't store secrets in environment variables** - Julia can read them
-- **Don't rely on AgentEval for sandboxing** - It executes arbitrary code
+- **Don't rely on AgentREPL for sandboxing** - It executes arbitrary code
 
 ## Vulnerability Reporting
 
-If you discover a security vulnerability in AgentEval, please:
+If you discover a security vulnerability in AgentREPL, please:
 
 1. **Do not open a public issue**
 2. Contact the maintainers privately
