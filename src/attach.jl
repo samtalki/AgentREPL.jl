@@ -35,7 +35,7 @@ function _start_repl_socket_server!(session::SessionState)
     sock_path = _socket_path(session.name)
 
     # Clean up stale socket file if it exists
-    isfile(sock_path) && rm(sock_path)
+    ispath(sock_path) && rm(sock_path)
 
     server_expr = quote
         let sock_path = $sock_path
