@@ -7,6 +7,11 @@ Clear worker-related fields on a session. Centralizes the paired reset of
 `worker_id` and `revise_loaded` so every call site stays consistent.
 """
 function _clear_worker_state!(session::SessionState)
+    # Clean up socket file from interactive REPL
+    if session.socket_path !== nothing
+        try; rm(session.socket_path; force=true); catch; end
+        session.socket_path = nothing
+    end
     session.worker_id = nothing
     session.revise_loaded = false
     empty!(session.eval_timings)
@@ -87,11 +92,25 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
             try
                 path = session.project_path
                 remotecall_fetch(Core.eval, session.worker_id, Main, :(Pkg.activate($path)))
+                # Sync workspace to project directory if not already set
+                if session.workspace_path === nothing
+                    session.workspace_path = session.project_path
+                end
             catch e
                 # Intentionally preserve project_path so a transient activation failure
                 # (e.g., missing Manifest.toml) can succeed on next worker spawn after
                 # the user runs pkg(action="instantiate")
                 @warn "Failed to activate project on worker — will retry on next worker spawn" project=session.project_path error=e
+            end
+        end
+
+        # Restore workspace (working directory) on the worker
+        if session.workspace_path !== nothing
+            try
+                wpath = session.workspace_path
+                remotecall_fetch(Core.eval, session.worker_id, Main, :(cd($wpath)))
+            catch e
+                @warn "Failed to restore workspace on worker" workspace=session.workspace_path error=e
             end
         end
 
@@ -159,7 +178,7 @@ function _with_output_capture(body_expr::Expr)
 end
 
 """
-    capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing, session_name::Union{String,Nothing}=nothing) -> (value_str, output, error_str, elapsed)
+    capture_eval_on_worker(code::String; timeout=nothing, session_name=nothing, isolated=false) -> (value_str, output, error_str, elapsed)
 
 Evaluate Julia code on the worker process, capturing both return value and printed output.
 Uses Core.eval with expressions to avoid closure serialization issues.
@@ -168,8 +187,10 @@ Returns a 4-tuple: (value_str, output, error_str, elapsed_seconds).
 
 If `timeout` is set (in seconds), the worker is killed after the timeout and a TimeoutError is returned.
 If `session_name` is given, evaluates on that session's worker; otherwise uses the current session.
+If `isolated` is true, evaluates in a fresh anonymous module instead of Main (variables don't persist).
 """
-function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing, session_name::Union{String,Nothing}=nothing)
+function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing,
+                                 session_name::Union{String,Nothing}=nothing, isolated::Bool=false)
     session = resolve_session(session_name)
     worker_id = ensure_worker!(session)
     session.last_used = time()
@@ -178,13 +199,19 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
     use_color = is_highlighting_enabled() && get_output_format() == :ansi
 
     eval_expr = quote
-        let code_str = $code, _use_color = $use_color
+        let code_str = $code, _use_color = $use_color, _isolated = $isolated
             (_eval_value, _eval_err, _eval_bt), stdout_content, stderr_content = $(_with_output_capture(quote
                 _eval_value = nothing
                 _eval_err = nothing
                 _eval_bt = nothing
                 try
-                    _eval_value = include_string(Main, code_str, "julia_eval")
+                    if _isolated
+                        # Evaluate in a fresh module — variables don't persist to Main
+                        _sandbox = Module(:AgentREPLSandbox, true)  # imports Base and Core
+                        _eval_value = include_string(_sandbox, code_str, "julia_eval")
+                    else
+                        _eval_value = include_string(Main, code_str, "julia_eval")
+                    end
                 catch e
                     _eval_err = e
                     _eval_bt = catch_backtrace()

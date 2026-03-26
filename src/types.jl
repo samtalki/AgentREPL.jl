@@ -10,6 +10,8 @@ project environment, and Revise.jl tracking state.
 - `name::String`: Session name (e.g., "default", "analysis", "testing") — must not be empty, immutable after construction
 - `worker_id::Union{Int, Nothing}`: Distributed.jl worker process ID
 - `project_path::Union{String, Nothing}`: Active project/environment path (persists across resets)
+- `workspace_path::Union{String, Nothing}`: Working directory on the worker (persists across resets, synced on activate)
+- `socket_path::Union{String, Nothing}`: Unix domain socket path for the interactive REPL server
 - `revise_loaded::Bool`: Whether Revise.jl was successfully loaded on the worker
 - `created_at::Float64`: Session creation time (from `time()`)
 - `last_used::Float64`: Last time this session was used (from `time()`)
@@ -19,6 +21,8 @@ mutable struct SessionState
     const name::String
     worker_id::Union{Int, Nothing}
     project_path::Union{String, Nothing}
+    workspace_path::Union{String, Nothing}
+    socket_path::Union{String, Nothing}
     revise_loaded::Bool
     created_at::Float64
     last_used::Float64
@@ -27,7 +31,7 @@ mutable struct SessionState
     function SessionState(name::String, worker_id::Union{Int,Nothing}, project_path::Union{String,Nothing}, revise_loaded::Bool=false)
         isempty(name) && error("Session name must not be empty")
         now = time()
-        new(name, worker_id, project_path, revise_loaded, now, now, Float64[])
+        new(name, worker_id, project_path, nothing, nothing, revise_loaded, now, now, Float64[])
     end
 end
 
@@ -61,6 +65,22 @@ Stores the initial project path so new sessions can inherit it.
 Set by start_server(project_dir=...), which reads JULIA_REPL_PROJECT upstream.
 """
 const _INITIAL_PROJECT_PATH = Ref{Union{String,Nothing}}(nothing)
+
+"""
+    _AUDIT_DIR::Ref{Union{String,Nothing}}
+
+Directory for persistent audit logs. When set, all eval interactions are
+written to per-session log files that survive server restarts.
+Set via `JULIA_REPL_AUDIT_DIR` environment variable.
+"""
+const _AUDIT_DIR = Ref{Union{String,Nothing}}(nothing)
+
+"""
+    _AUDIT_IOS::Dict{String, IO}
+
+Open file handles for per-session audit log files. Keyed by session name.
+"""
+const _AUDIT_IOS = Dict{String, IO}()
 
 """
     LogViewerState

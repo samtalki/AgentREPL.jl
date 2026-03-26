@@ -27,7 +27,9 @@ function activate_project_on_worker!(path::String; session_name::Union{String,No
         let p = $resolved_path
             try
                 Pkg.activate(p)
-                (success = true, project = dirname(Pkg.project().path))
+                project_dir = dirname(Pkg.project().path)
+                cd(project_dir)
+                (success = true, project = project_dir)
             catch e
                 (success = false, error = sprint(showerror, e))
             end
@@ -38,6 +40,7 @@ function activate_project_on_worker!(path::String; session_name::Union{String,No
         result = remotecall_fetch(Core.eval, worker_id, Main, activate_expr)
         if result.success
             session.project_path = result.project
+            session.workspace_path = result.project
         end
         return result
     catch e
