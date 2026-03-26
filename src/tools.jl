@@ -136,7 +136,7 @@ Use `revise(action="revise")` after editing .jl files to hot-reload changes with
                 # Ephemeral mode: create a temporary session, eval, then destroy it
                 ephemeral_name = nothing
                 if ephemeral
-                    ephemeral_name = "ephemeral-$(string(rand(UInt32), base=16))"
+                    ephemeral_name = "ephemeral-$(string(rand(UInt64), base=16))"
                     create_session!(ephemeral_name)
                     session_name = ephemeral_name
                 end
@@ -151,7 +151,12 @@ Use `revise(action="revise")` after editing .jl files to hot-reload changes with
                     TextContent(text = result)
                 finally
                     if ephemeral_name !== nothing
-                        try; destroy_session!(ephemeral_name); catch; end
+                        try
+                            destroy_session!(ephemeral_name)
+                        catch e
+                            e isa InterruptException && rethrow()
+                            @warn "Failed to clean up ephemeral session" name=ephemeral_name exception=e
+                        end
                     end
                 end
             catch e

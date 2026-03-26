@@ -28,7 +28,11 @@ function activate_project_on_worker!(path::String; session_name::Union{String,No
             try
                 Pkg.activate(p)
                 project_dir = dirname(Pkg.project().path)
-                cd(project_dir)
+                try
+                    cd(project_dir)
+                catch cd_err
+                    @warn "cd to project directory failed (activation succeeded)" dir=project_dir exception=cd_err
+                end
                 (success = true, project = project_dir)
             catch e
                 (success = false, error = sprint(showerror, e))

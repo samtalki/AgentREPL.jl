@@ -7,7 +7,7 @@
 # providing a human-friendly REPL that shares state with the MCP agent.
 
 using Sockets: connect
-using Base64: base64decode
+using Base64: base64decode, base64encode
 
 function main()
     if length(ARGS) < 1
@@ -84,7 +84,11 @@ function main()
                     printstyled(continuation, color=:green)
                     next_line = try
                         readline(stdin)
-                    catch
+                    catch e
+                        if e isa InterruptException
+                            println()
+                            code = ""
+                        end
                         break
                     end
                     code *= "\n" * next_line
@@ -94,9 +98,12 @@ function main()
             end
         end
 
-        # Send code to worker
+        # Skip if code was cleared (e.g., Ctrl+C during continuation)
+        isempty(strip(code)) && continue
+
+        # Send code to worker (base64-encoded to support multiline)
         try
-            println(conn, code)
+            println(conn, base64encode(code))
             flush(conn)
         catch e
             printstyled("Connection lost\n", color=:red)

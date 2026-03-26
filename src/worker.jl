@@ -9,7 +9,11 @@ Clear worker-related fields on a session. Centralizes the paired reset of
 function _clear_worker_state!(session::SessionState)
     # Clean up socket file from interactive REPL
     if session.socket_path !== nothing
-        try; rm(session.socket_path; force=true); catch; end
+        try
+            rm(session.socket_path; force=true)
+        catch e
+            @debug "Failed to remove socket file" path=session.socket_path exception=e
+        end
         session.socket_path = nothing
     end
     session.worker_id = nothing
@@ -110,7 +114,8 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
                 wpath = session.workspace_path
                 remotecall_fetch(Core.eval, session.worker_id, Main, :(cd($wpath)))
             catch e
-                @warn "Failed to restore workspace on worker" workspace=session.workspace_path error=e
+                @warn "Failed to restore workspace on worker, clearing" workspace=session.workspace_path error=e
+                session.workspace_path = nothing
             end
         end
 

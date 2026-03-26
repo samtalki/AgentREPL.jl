@@ -12,6 +12,7 @@ using Aqua
     include("test_highlighting.jl")
     include("test_eval.jl")
     include("test_sessions.jl")
+    include("test_competitive_features.jl")
     include("test_revise.jl")
 
     # MCP protocol integration tests (spawn server subprocess, ~60s)

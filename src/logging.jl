@@ -322,6 +322,19 @@ function close_audit_logs!()
 end
 
 """
+    close_audit_io_for_session!(session_name::String)
+
+Close the audit log file handle for a specific session, if one is open.
+Called from destroy_session! to prevent file handle leaks.
+"""
+function close_audit_io_for_session!(session_name::String)
+    if haskey(_AUDIT_IOS, session_name)
+        try; close(_AUDIT_IOS[session_name]); catch; end
+        delete!(_AUDIT_IOS, session_name)
+    end
+end
+
+"""
     log_interaction(code, value_str, output, error_str; elapsed=nothing, session_name="default")
 
 Log an interaction to the log file with ANSI syntax highlighting.
@@ -385,9 +398,6 @@ end
 Close the log viewer and clean up.
 """
 function close_log_viewer!()
-    # Close audit logs
-    close_audit_logs!()
-
     if LOG_VIEWER.log_io !== nothing
         try
             println(LOG_VIEWER.log_io, "\n", "="^60)

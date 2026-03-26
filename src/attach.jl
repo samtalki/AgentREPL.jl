@@ -16,10 +16,17 @@ Start a Unix domain socket server on the session's worker process.
 The server listens for connections and evaluates code in Main, returning results.
 Socket file is chmod 600 for security (owner-only access).
 
-Protocol (line-based):
-- Client sends a line of Julia code (terminated by newline)
+Protocol (line-based, base64-encoded):
+- Client sends base64-encoded Julia code as a single line (supports multiline code)
 - Server responds with: "OK:<base64-encoded result>" or "ERR:<base64-encoded error>"
 - Empty line from client = disconnect
+
+Socket cleanup relies on worker kill — no explicit server stop mechanism exists.
+listen() and chmod() run synchronously before the @async accept loop, so start
+failures are detected immediately by remotecall_fetch.
+
+Note: The interactive REPL and MCP eval share the same worker process. Concurrent
+evaluation from both paths may produce interleaved stdout/stderr output.
 """
 function _start_repl_socket_server!(session::SessionState)
     worker_id = session.worker_id
@@ -30,14 +37,12 @@ function _start_repl_socket_server!(session::SessionState)
     # Clean up stale socket file if it exists
     isfile(sock_path) && rm(sock_path)
 
-    # Start the socket server on the worker
     server_expr = quote
         let sock_path = $sock_path
             using Sockets: listen, accept
-            using Base64: base64encode
+            using Base64: base64encode, base64decode
 
             server = listen(sock_path)
-            # Set owner-only permissions (chmod 600)
             chmod(sock_path, 0o600)
 
             @async while isopen(server)
@@ -49,15 +54,32 @@ function _start_repl_socket_server!(session::SessionState)
                                 line = readline(conn)
                                 isempty(line) && break
 
+                                # Decode base64-encoded code from client (supports multiline)
+                                code = try
+                                    String(base64decode(line))
+                                catch
+                                    line  # fallback: treat as raw code
+                                end
+
                                 result_str = try
-                                    val = include_string(Main, line, "interactive_repl")
+                                    val = include_string(Main, code, "interactive_repl")
                                     repr_str = try
                                         sprint(io -> show(IOContext(io, :color => true, :compact => true, :limit => true), MIME"text/plain"(), val))
-                                    catch
-                                        try; string(val); catch; "<$(typeof(val))>"; end
+                                    catch e
+                                        e isa OutOfMemoryError && rethrow()
+                                        e isa InterruptException && rethrow()
+                                        try
+                                            string(val)
+                                        catch inner_e
+                                            inner_e isa OutOfMemoryError && rethrow()
+                                            inner_e isa InterruptException && rethrow()
+                                            "<$(typeof(val))>"
+                                        end
                                     end
                                     "OK:" * base64encode(repr_str)
                                 catch e
+                                    e isa OutOfMemoryError && rethrow()
+                                    e isa InterruptException && rethrow()
                                     err_str = sprint(showerror, e, catch_backtrace())
                                     "ERR:" * base64encode(err_str)
                                 end
@@ -66,13 +88,16 @@ function _start_repl_socket_server!(session::SessionState)
                                 flush(conn)
                             end
                         catch e
-                            # Connection closed or error — silently clean up
+                            e isa OutOfMemoryError && rethrow()
+                            e isa InterruptException && rethrow()
+                            @debug "REPL socket connection ended" exception=e
                         finally
                             try; close(conn); catch; end
                         end
                     end
                 catch e
-                    # Server accept failed — might be closing down
+                    e isa OutOfMemoryError && rethrow()
+                    e isa InterruptException && rethrow()
                     isopen(server) && @warn "REPL socket accept error" exception=e
                 end
             end
@@ -92,18 +117,6 @@ function _start_repl_socket_server!(session::SessionState)
 end
 
 """
-    _stop_repl_socket_server!(session::SessionState)
-
-Stop the Unix domain socket server and clean up the socket file.
-"""
-function _stop_repl_socket_server!(session::SessionState)
-    if session.socket_path !== nothing
-        try; rm(session.socket_path; force=true); catch; end
-        session.socket_path = nothing
-    end
-end
-
-"""
     _open_attach_tmux(session::SessionState) -> String
 
 Open a tmux window with the interactive REPL client connected to the session's worker.
@@ -119,7 +132,8 @@ function _open_attach_tmux(session::SessionState)
     # Kill existing tmux session if any
     try
         run(ignorestatus(pipeline(`tmux kill-session -t $tmux_name`, devnull)))
-    catch
+    catch e
+        @debug "tmux kill-session failed" exception=e
     end
 
     # Path to the repl client script
@@ -130,6 +144,7 @@ function _open_attach_tmux(session::SessionState)
     project_dir = try
         dirname(Pkg.project().path)
     catch
+        @warn "Could not determine project directory for REPL client, using '.'"
         "."
     end
 

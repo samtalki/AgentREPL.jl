@@ -71,6 +71,7 @@ function destroy_session!(name::String)
 
     session = SESSIONS.sessions[name]
     kill_worker!(session)
+    close_audit_io_for_session!(name)
     delete!(SESSIONS.sessions, name)
 
     if SESSIONS.current == name
@@ -146,6 +147,11 @@ function _cleanup_all_workers!()
     end
     for (_, s) in SESSIONS.sessions
         _clear_worker_state!(s)
+    end
+    try
+        close_audit_logs!()
+    catch e
+        try; println(stderr, "AgentREPL: failed to close audit logs: ", sprint(showerror, e)); catch; end
     end
     try
         close_log_viewer!()

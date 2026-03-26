@@ -10,7 +10,7 @@ project environment, and Revise.jl tracking state.
 - `name::String`: Session name (e.g., "default", "analysis", "testing") — must not be empty, immutable after construction
 - `worker_id::Union{Int, Nothing}`: Distributed.jl worker process ID
 - `project_path::Union{String, Nothing}`: Active project/environment path (persists across resets)
-- `workspace_path::Union{String, Nothing}`: Working directory on the worker (persists across resets, synced on activate)
+- `workspace_path::Union{String, Nothing}`: Project directory restored on worker spawn/reset (set by activate, not updated by eval cd() calls)
 - `socket_path::Union{String, Nothing}`: Unix domain socket path for the interactive REPL server
 - `revise_loaded::Bool`: Whether Revise.jl was successfully loaded on the worker
 - `created_at::Float64`: Session creation time (from `time()`)
