@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_julia_julia-repl__eval",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Before calling eval, display the Julia code you are about to evaluate in a ```julia code block in your response text. The MCP permission prompt shows code as an escaped string which is unreadable — the user needs to see formatted code first."
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",

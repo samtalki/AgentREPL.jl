@@ -83,6 +83,18 @@ Use `revise(action="revise")` after editing .jl files to hot-reload changes with
                 type = "string",
                 description = "Session name to evaluate in. If omitted, uses the current session.",
                 required = false
+            ),
+            ToolParameter(
+                name = "isolated",
+                type = "boolean",
+                description = "If true, evaluate in a fresh anonymous module instead of Main. Variables and functions won't persist — useful for one-shot computations or experimental code that shouldn't pollute the session namespace.",
+                required = false
+            ),
+            ToolParameter(
+                name = "ephemeral",
+                type = "boolean",
+                description = "If true, evaluate in a temporary session that is automatically destroyed after execution. Provides full process isolation — separate worker, clean state, no side effects on existing sessions. More expensive than 'isolated' (spawns a new worker).",
+                required = false
             )
         ],
         handler = params -> begin
@@ -118,13 +130,35 @@ Use `revise(action="revise")` after editing .jl files to hot-reload changes with
                     return TextContent(text = "Error: 'max_stackframes' must be an integer")
                 end
                 session_name = get(params, "session", nothing)
+                isolated = get(params, "isolated", false) == true
+                ephemeral = get(params, "ephemeral", false) == true
 
-                value_str, output, error_str, elapsed = capture_eval_on_worker(code; timeout=timeout, session_name=session_name)
-                log_interaction(code, value_str, output, error_str; elapsed=elapsed)
+                # Ephemeral mode: create a temporary session, eval, then destroy it
+                ephemeral_name = nothing
+                if ephemeral
+                    ephemeral_name = "ephemeral-$(string(rand(UInt64), base=16))"
+                    create_session!(ephemeral_name)
+                    session_name = ephemeral_name
+                end
 
-                result = format_result(code, value_str, output, error_str;
-                                        elapsed=elapsed, max_output=max_output, max_stackframes=max_stackframes)
-                TextContent(text = result)
+                try
+                    value_str, output, error_str, elapsed = capture_eval_on_worker(code; timeout=timeout, session_name=session_name, isolated=isolated)
+                    resolved_name = resolve_session(session_name).name
+                    log_interaction(code, value_str, output, error_str; elapsed=elapsed, session_name=resolved_name)
+
+                    result = format_result(code, value_str, output, error_str;
+                                            elapsed=elapsed, max_output=max_output, max_stackframes=max_stackframes)
+                    TextContent(text = result)
+                finally
+                    if ephemeral_name !== nothing
+                        try
+                            destroy_session!(ephemeral_name)
+                        catch e
+                            e isa InterruptException && rethrow()
+                            @warn "Failed to clean up ephemeral session" name=ephemeral_name exception=e
+                        end
+                    end
+                end
             catch e
                 e isa InterruptException && rethrow()
                 e isa OutOfMemoryError && rethrow()
@@ -538,18 +572,22 @@ Actions:
 - switch: Switch the active session
 - list: Show all sessions with status
 - destroy: Kill a session's worker and remove it
+- attach: Open an interactive REPL in tmux that shares state with this MCP session.
+  The human and agent share the same Main namespace — variables defined by either side are visible to both.
+  Requires tmux. The session continues running after the human disconnects.
 
 Examples:
 - session(action="create", name="analysis")
 - session(action="switch", name="analysis")
 - session(action="list")
 - session(action="destroy", name="analysis")
+- session(action="attach") or session(action="attach", name="analysis")
 """,
         parameters = [
             ToolParameter(
                 name = "action",
                 type = "string",
-                description = "Session action: create, switch, list, or destroy",
+                description = "Session action: create, switch, list, destroy, or attach",
                 required = true
             ),
             ToolParameter(
@@ -561,7 +599,7 @@ Examples:
         ],
         handler = params -> begin
             try
-                action_lower = _validate_action(params, ["create", "switch", "list", "destroy"])
+                action_lower = _validate_action(params, ["create", "switch", "list", "destroy", "attach"])
 
                 if action_lower in ["create", "switch", "destroy"]
                     name = _require_string_param(params, "name", action_lower)
@@ -603,6 +641,29 @@ Examples:
                     if current !== nothing
                         msg *= "\nCurrent session: $current"
                     end
+                    TextContent(text = msg)
+
+                elseif action_lower == "attach"
+                    # Attach uses optional name — defaults to current session
+                    target_name = get(params, "name", nothing)
+                    session = resolve_session(target_name isa AbstractString ? String(strip(target_name)) : nothing)
+
+                    # Ensure worker is running (attach needs a live worker)
+                    ensure_worker!(session)
+
+                    # Start socket server if not already running
+                    if session.socket_path === nothing || !ispath(session.socket_path)
+                        _start_repl_socket_server!(session)
+                    end
+
+                    # Open tmux with the REPL client
+                    tmux_name = _open_attach_tmux(session)
+
+                    msg = "Interactive REPL opened for session '$(session.name)'.\n"
+                    msg *= "tmux session: $tmux_name\n"
+                    msg *= "Attach with: tmux attach -t $tmux_name\n\n"
+                    msg *= "You and the agent now share the same Julia state.\n"
+                    msg *= "Variables defined in either the interactive REPL or via MCP eval are visible to both."
                     TextContent(text = msg)
 
                 else

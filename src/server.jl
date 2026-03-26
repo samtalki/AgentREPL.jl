@@ -33,6 +33,15 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
         _INITIAL_PROJECT_PATH[] = project_dir
     end
 
+    # Check for audit log directory
+    # JULIA_REPL_AUDIT_DIR: path to directory for persistent audit logs (default: disabled)
+    audit_dir = get(ENV, "JULIA_REPL_AUDIT_DIR", nothing)
+    if audit_dir !== nothing
+        mkpath(audit_dir)
+        _AUDIT_DIR[] = audit_dir
+        @info "Audit logging enabled" dir=audit_dir
+    end
+
     # Check for log viewer environment variables
     # JULIA_REPL_VIEWER: "auto", "tmux", "file", "none" (default: "none")
     # JULIA_REPL_LOG: path to log file (default: ~/.julia/logs/repl.log)

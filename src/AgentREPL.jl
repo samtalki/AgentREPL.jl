@@ -65,6 +65,7 @@ include("worker.jl")
 include("revise.jl")
 include("packages.jl")
 include("logging.jl")
+include("attach.jl")
 include("tools.jl")
 include("server.jl")
 

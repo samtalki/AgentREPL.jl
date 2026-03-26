@@ -41,8 +41,8 @@ All tools except `log_viewer` and `session` accept an optional `session` paramet
 ### Skills
 
 **Core skills (auto-triggering):**
-- `julia-evaluation` - Comprehensive best practices for using the Julia REPL tools
-- `julia-language` - Deep Julia language expertise (types, dispatch, metaprogramming, performance)
+- `julia-evaluation` - Behavioral rules for REPL usage (display code before eval, revise vs reset, error recovery)
+- `julia-plot` - UnicodePlots setup and display guidance
 
 **User-invoked skills (slash commands):**
 - `/julia:julia-reset` - Kill and respawn the Julia worker
@@ -56,8 +56,9 @@ All tools except `log_viewer` and `session` accept an optional `session` paramet
 
 ### Hooks
 
-- **PreToolUse (eval)** - Validates that Julia code is displayed in a readable format before calling eval
-- **PostToolUse (Write/Edit)** - Automatically calls `revise` after editing `.jl` files to hot-reload changes into the active Julia session
+- **PreToolUse (eval)** - Ensures Julia code is displayed in a readable format before calling eval
+- **PostToolUse (Write/Edit)** - Automatically calls `revise` after editing `.jl` files to hot-reload changes
+- **PostToolUse (eval)** - Pastes rich visual output (plots, tables, matrices) as raw text to preserve ANSI colors
 
 ## Architecture
 

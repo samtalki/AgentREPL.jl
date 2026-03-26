@@ -225,13 +225,127 @@ function setup_log_viewer!(; mode::Symbol=:auto, log_path::Union{String,Nothing}
 end
 
 """
-    log_interaction(code, value_str, output, error_str; elapsed=nothing)
+    _get_audit_io(session_name::String) -> Union{IO, Nothing}
+
+Get or create the audit log file handle for a session. Returns nothing if auditing is disabled.
+Files are named `{audit_dir}/{session_name}_{date}.log` and opened in append mode.
+"""
+function _get_audit_io(session_name::String)
+    _AUDIT_DIR[] === nothing && return nothing
+
+    # Check if we already have an open handle
+    if haskey(_AUDIT_IOS, session_name)
+        io = _AUDIT_IOS[session_name]
+        isopen(io) && return io
+        delete!(_AUDIT_IOS, session_name)
+    end
+
+    # Open new audit log file (append mode, one per session per day)
+    dir = _AUDIT_DIR[]
+    date_str = Dates.format(Dates.today(), "yyyy-mm-dd")
+    path = joinpath(dir, "$(session_name)_$(date_str).log")
+    try
+        io = open(path, "a")
+        _AUDIT_IOS[session_name] = io
+        return io
+    catch e
+        @warn "Could not open audit log" path exception=e
+        return nothing
+    end
+end
+
+"""
+    audit_interaction(session_name, code, value_str, output, error_str; elapsed=nothing)
+
+Write a structured audit log entry for an eval interaction. Audit logs are plain text,
+human-readable, and persist across server restarts. No ANSI codes.
+"""
+function audit_interaction(session_name::String, code::String, value_str::String, output::String,
+                            error_str::Union{String,Nothing}; elapsed::Union{Float64,Nothing}=nothing)
+    io = _get_audit_io(session_name)
+    io === nothing && return
+
+    try
+        timestamp = Dates.format(Dates.now(), "yyyy-mm-ddTHH:MM:SS.sss")
+        elapsed_str = elapsed !== nothing ? format_elapsed(elapsed) : "n/a"
+        println(io, "═══ ", timestamp, " ═══ session=", session_name, " elapsed=", elapsed_str)
+
+        # Code block
+        code_lines = split(strip(code), '\n')
+        println(io, "julia> ", code_lines[1])
+        for line in code_lines[2:end]
+            println(io, "       ", line)
+        end
+
+        # Output
+        if !isempty(strip(output))
+            println(io, "--- output ---")
+            println(io, output)
+        end
+
+        # Result or error
+        if error_str !== nothing
+            println(io, "--- error ---")
+            println(io, error_str)
+        elseif !isempty(strip(value_str))
+            println(io, "--- result ---")
+            # Truncate very large results in audit logs
+            if length(value_str) > 2000
+                println(io, first(value_str, 1000))
+                println(io, "... $(length(value_str) - 2000) chars truncated ...")
+                println(io, last(value_str, 1000))
+            else
+                println(io, value_str)
+            end
+        end
+
+        println(io)
+        flush(io)
+    catch e
+        @warn "Audit log write failed" session=session_name exception=e
+        # Close and remove the broken handle
+        try; close(io); catch; end
+        delete!(_AUDIT_IOS, session_name)
+    end
+end
+
+"""
+    close_audit_logs!()
+
+Close all open audit log file handles.
+"""
+function close_audit_logs!()
+    for (name, io) in _AUDIT_IOS
+        try; close(io); catch; end
+    end
+    empty!(_AUDIT_IOS)
+end
+
+"""
+    close_audit_io_for_session!(session_name::String)
+
+Close the audit log file handle for a specific session, if one is open.
+Called from destroy_session! to prevent file handle leaks.
+"""
+function close_audit_io_for_session!(session_name::String)
+    if haskey(_AUDIT_IOS, session_name)
+        try; close(_AUDIT_IOS[session_name]); catch; end
+        delete!(_AUDIT_IOS, session_name)
+    end
+end
+
+"""
+    log_interaction(code, value_str, output, error_str; elapsed=nothing, session_name="default")
 
 Log an interaction to the log file with ANSI syntax highlighting.
+Also writes to audit log if `JULIA_REPL_AUDIT_DIR` is configured.
 Uses JuliaSyntaxHighlighting for code coloring when highlighting is enabled.
 """
 function log_interaction(code::String, value_str::String, output::String, error_str::Union{String,Nothing};
-                          elapsed::Union{Float64,Nothing}=nothing)
+                          elapsed::Union{Float64,Nothing}=nothing, session_name::String="default")
+    # Write audit log (persistent, plain text, survives server restart)
+    audit_interaction(session_name, code, value_str, output, error_str; elapsed=elapsed)
+
     LOG_VIEWER.log_io === nothing && return
 
     try
