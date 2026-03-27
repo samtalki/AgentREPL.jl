@@ -14,7 +14,7 @@ Always display code in a readable julia code block BEFORE calling eval. The MCP 
 
 ## After Eval
 
-MCP tool results are collapsed in Claude Code. If eval returns rich visual output (plots, tables, matrices, DataFrames, multi-line structured data), paste the complete output as raw text (NOT in a code block) to preserve ANSI colors. Do not paste simple scalars or errors.
+MCP tool results are collapsed in Claude Code. For visual output (plots, heatmaps), tell the user to expand the tool result (Ctrl+O) to see it with full color — do NOT paste ANSI art into your message (it loses colors and streams token-by-token). For structured text (tables, matrices, DataFrames), paste in a fenced code block. Do not paste simple scalars or errors.
 
 ## Revise vs Reset
 

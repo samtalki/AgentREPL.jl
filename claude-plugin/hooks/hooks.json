@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "If the eval result contains rich visual output — Unicode plots (Braille characters ⠀-⣿), tables, matrices, DataFrames, or multi-line structured output — paste the complete output directly into your response as raw text (NOT inside a code block) so ANSI terminal colors are preserved. Do NOT paste simple scalar results (numbers, short strings, booleans, nothing) or error messages."
+            "prompt": "If the eval result contains visual output (Unicode plots with Braille characters, heatmaps, density plots), tell the user to expand the tool result to see it with full color: 'Expand the eval result above (Ctrl+O) to see the plot with colors.' Do NOT paste plot/ANSI art into your message — it loses colors and streams painfully slowly. For structured text output (tables, matrices, DataFrames), paste it in a fenced code block. Do not paste simple scalars or errors."
           }
         ]
       }
