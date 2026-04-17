@@ -549,3 +549,7 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on:
 - [Kaimon.jl](https://github.com/kahliburke/Kaimon.jl) - Comprehensive Julia agent toolkit
 - [REPLicant.jl](https://github.com/MichaelHatherly/REPLicant.jl) - Alternative approach
 - [Modern Julia Workflows](https://modernjuliaworkflows.org/) - Best practices guide
+
+## Links
+
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/agentrepl-jl)
