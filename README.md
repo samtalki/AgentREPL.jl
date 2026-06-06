@@ -44,7 +44,7 @@ claude /plugin add samtalki/AgentREPL.jl
 This provides:
 - Auto-configured MCP server (no manual setup)
 - 8 skills: `/julia-reset`, `/julia-info`, `/julia-pkg`, `/julia-activate`, `/julia-log`, `/julia-session`, `/julia-revise`, `/julia-develop`
-- Auto-triggering skills for Julia evaluation best practices and language expertise
+- Auto-triggering skills for Julia evaluation best practices and terminal plotting
 - Hooks: code display validation before `eval`, automatic `revise` after `.jl` file edits
 
 ### Option B: Manual MCP Configuration
@@ -416,7 +416,7 @@ No need to manually run `claude mcp add`. The plugin configures the Julia MCP se
 | `/julia:julia-revise [action] [path]` | Hot-reload code changes |
 | `/julia:julia-develop [path]` | Set up development workflow |
 
-**Auto-triggering:** `julia-evaluation` (best practices for REPL usage) and `julia-language` (deep Julia expertise: types, dispatch, metaprogramming, performance).
+**Auto-triggering:** `julia-evaluation` (best practices for REPL usage) and `julia-plot` (terminal-native plotting with UnicodePlots.jl).
 
 ### Hooks
 
