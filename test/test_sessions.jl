@@ -14,7 +14,7 @@ end
     @testset "Default session auto-creation" begin
         session = AgentREPL.get_current_session!()
         @test session.name == "default"
-        @test session.worker_id === nothing  # Lazy spawning
+        @test session.worker === nothing  # Lazy spawning
         @test AgentREPL.SESSIONS.current == "default"
     end
 
@@ -100,7 +100,7 @@ end
         # Create a session and eval something to spawn worker
         AgentREPL.create_session!("doomed")
         AgentREPL.capture_eval_on_worker("x = 1")
-        doomed_worker = AgentREPL.SESSIONS.sessions["doomed"].worker_id
+        doomed_worker = AgentREPL.SESSIONS.sessions["doomed"].worker
         @test doomed_worker !== nothing
 
         # Switch away and destroy

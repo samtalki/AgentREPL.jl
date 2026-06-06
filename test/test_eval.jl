@@ -87,7 +87,7 @@ end
         @test elapsed >= 1.0
         # Worker should have been killed
         session = AgentREPL.get_current_session!()
-        @test session.worker_id === nothing
+        @test session.worker === nothing
     end
 
     @testset "Next eval after timeout spawns fresh worker" begin
@@ -96,7 +96,7 @@ end
         @test error_str === nothing
         @test value_str == "42"
         session = AgentREPL.get_current_session!()
-        @test session.worker_id !== nothing
+        @test session.worker !== nothing
     end
 
     @testset "No timeout when code completes fast" begin
@@ -256,9 +256,10 @@ end
 
         # Reset the worker
         session = AgentREPL.get_current_session!()
-        old_id = session.worker_id
-        new_id = AgentREPL.reset_worker!(session)
-        @test new_id != old_id
+        old_pid = AgentREPL.worker_pid(session)
+        AgentREPL.reset_worker!(session)
+        new_pid = AgentREPL.worker_pid(session)
+        @test new_pid != old_pid
 
         # Variable should no longer exist
         _, _, error_str, _ = AgentREPL.capture_eval_on_worker("reset_test_var")
@@ -286,13 +287,13 @@ end
         # Ensure we have a worker
         session = AgentREPL.get_current_session!()
         AgentREPL.ensure_worker!(session)
-        @test session.worker_id !== nothing
+        @test session.worker !== nothing
 
         # exit() should crash the worker
         value_str, output, error_str, elapsed = AgentREPL.capture_eval_on_worker("exit()")
         @test error_str !== nothing
-        @test contains(error_str, "crashed") || contains(error_str, "ProcessExitedException")
-        @test session.worker_id === nothing
+        @test contains(error_str, "terminated") || contains(error_str, "crashed")
+        @test session.worker === nothing
         @test session.revise_loaded == false
     end
 
@@ -302,7 +303,7 @@ end
         @test error_str === nothing
         @test value_str == "42"
         session = AgentREPL.get_current_session!()
-        @test session.worker_id !== nothing
+        @test session.worker !== nothing
     end
 end
 
@@ -346,13 +347,13 @@ end
         AgentREPL.create_session!("cleanup-test")
         AgentREPL.capture_eval_on_worker("1+1"; session_name="cleanup-test")
         session = AgentREPL.SESSIONS.sessions["cleanup-test"]
-        worker_id = session.worker_id
-        @test worker_id !== nothing
-        @test worker_id in Distributed.workers()
+        worker = session.worker
+        @test worker !== nothing
+        @test AgentREPL.Malt.isrunning(worker)
 
         AgentREPL._cleanup_all_workers!()
 
-        @test !(worker_id in Distributed.workers())
+        @test !AgentREPL.Malt.isrunning(worker)
         # Clean up session registry
         try; AgentREPL.destroy_session!("cleanup-test"); catch; end
     end
@@ -477,5 +478,5 @@ end
 @testset "Cleanup" begin
     session = AgentREPL.get_current_session!()
     AgentREPL.kill_worker!(session)
-    @test session.worker_id === nothing
+    @test session.worker === nothing
 end

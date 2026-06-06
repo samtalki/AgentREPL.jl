@@ -18,15 +18,45 @@ const JULIA_EXE = Base.julia_cmd().exec[1]
 
 mutable struct MCPClient
     proc::Base.Process
-    input::IO   # write to server stdin
-    output::IO  # read from server stdout
+    input::IO              # write to server stdin
+    output::IO             # read from server stdout
     next_id::Int
+    lines::Channel{String} # every stdout line, fed by one background reader
 end
 
 function start_server()
     cmd = `$JULIA_EXE --project=$PROJECT_DIR $SERVER_SCRIPT`
     proc = open(cmd, "r+")
-    MCPClient(proc, proc, proc, 1)
+    lines = Channel{String}(10_000)
+    client = MCPClient(proc, proc, proc, 1, lines)
+    # A SINGLE reader owns the stream. Consumers poll the channel; nothing else
+    # calls readline, so no dangling reader can steal another consumer's line.
+    @async begin
+        try
+            for line in eachline(proc)
+                put!(lines, line)
+            end
+        catch
+        finally
+            try; close(lines); catch; end
+        end
+    end
+    return client
+end
+
+# Take the next line from the reader channel within `timeout`, or `nothing`.
+# Polls with `isready` so it never leaves a blocked `take!` behind.
+function _next_line(client::MCPClient, timeout::Float64)
+    deadline = time() + timeout
+    while time() < deadline
+        if isready(client.lines)
+            return take!(client.lines)
+        elseif !isopen(client.lines)
+            return nothing  # reader finished (server EOF) and nothing buffered
+        end
+        sleep(0.02)
+    end
+    return nothing
 end
 
 function send_request!(client::MCPClient, method::String, params::Dict=Dict())
@@ -59,30 +89,12 @@ function recv_response(client::MCPClient; timeout::Float64=60.0)
         remaining = deadline - time()
         remaining <= 0 && error("Timeout ($(timeout)s) reading from MCP server")
 
-        ch = Channel{String}(1)
-        @async begin
-            try
-                line = readline(client.output)
-                put!(ch, line)
-            catch e
-                try; put!(ch, ""); catch; end
-            end
-        end
-        timer = Timer(remaining) do _
-            try; put!(ch, ""); catch; end
-        end
-        line = take!(ch)
-        close(timer)
-        close(ch)
+        line = _next_line(client, remaining)
+        line === nothing && error("Timeout ($(timeout)s) or EOF reading from MCP server")
 
-        isempty(line) && error("Timeout ($(timeout)s) or EOF reading from MCP server")
-
-        # Skip non-JSON lines (e.g., "From worker N:" messages from Distributed.jl)
-        stripped = strip(line)
-        if startswith(stripped, "{")
-            return JSON3.read(line, Dict{String,Any})
-        end
-        # else: skip this line and read the next one
+        # Skip any non-JSON line (defensive — the transport should be clean JSON).
+        startswith(strip(line), "{") || continue
+        return JSON3.read(line, Dict{String,Any})
     end
 end
 
@@ -96,6 +108,22 @@ function get_tool_text(resp)
     result = resp["result"]
     content = result["content"]
     return content[1]["text"]
+end
+
+# Collect everything the server emits on stdout over `idle` seconds. Used to assert
+# the JSON-RPC transport never carries stray (non-JSON) output.
+function drain_stdout_lines(client::MCPClient; idle::Float64=3.0)
+    lines = String[]
+    deadline = time() + idle
+    while time() < deadline
+        if isready(client.lines)
+            line = take!(client.lines)
+            isempty(line) || push!(lines, line)
+        else
+            sleep(0.05)
+        end
+    end
+    return lines
 end
 
 function shutdown!(client::MCPClient)
@@ -125,6 +153,12 @@ end
             @test resp["result"]["serverInfo"]["name"] == "julia-repl"
             @test haskey(resp["result"], "protocolVersion")
 
+            # Advertise only what we implement: tools + resources, not prompts (B1)
+            caps = resp["result"]["capabilities"]
+            @test haskey(caps, "tools")
+            @test haskey(caps, "resources")
+            @test !haskey(caps, "prompts")
+
             # Send initialized notification
             send_notification!(client, "notifications/initialized")
         end
@@ -133,9 +167,12 @@ end
         @testset "List tools" begin
             send_request!(client, "tools/list", Dict())
             resp = recv_response(client; timeout=10.0)
-            tool_names = Set([t["name"] for t in resp["result"]["tools"]])
+            tools = resp["result"]["tools"]
+            tool_names = Set([t["name"] for t in tools])
             expected = Set(["eval", "reset", "info", "pkg", "activate", "log_viewer", "session", "revise"])
             @test tool_names == expected
+            # Every tool carries a human-friendly title (B3)
+            @test all(haskey(t, "title") && !isempty(t["title"]) for t in tools)
         end
 
         # --- eval tool ---
@@ -234,6 +271,46 @@ end
         # Skip log_viewer tests: mode="file" and mode="auto" open terminal windows
         # which have visual side effects inappropriate for automated testing.
         # The log_viewer tool is tested manually.
+
+        # --- resources ---
+        @testset "resources - list" begin
+            send_request!(client, "resources/list", Dict())
+            resp = recv_response(client; timeout=10.0)
+            uris = Set([r["uri"] for r in resp["result"]["resources"]])
+            @test "agentrepl://session/info" in uris
+            @test "agentrepl://session/variables" in uris
+            @test "agentrepl://sessions" in uris
+        end
+
+        @testset "resources - read info" begin
+            send_request!(client, "resources/read", Dict("uri" => "agentrepl://session/info"))
+            resp = recv_response(client; timeout=60.0)
+            contents = resp["result"]["contents"]
+            @test !isempty(contents)
+            payload = JSON3.read(contents[1]["text"], Dict{String,Any})
+            @test haskey(payload, "julia_version")
+            @test haskey(payload, "worker_pid")
+        end
+
+        # --- transport stays clean JSON even when a worker prints out of band ---
+        @testset "Transport stream cleanliness" begin
+            # marker bytes "{LEAK" — built at runtime, so it cannot appear in the
+            # echoed source. It fires ~1s later, outside the eval capture window.
+            code = "@async (sleep(1.0); println(String(UInt8[123,76,69,65,75]))); 7"
+            resp = call_tool!(client, "eval", Dict("code" => code); timeout=90.0)
+            @test occursin("7", get_tool_text(resp))
+
+            extra = drain_stdout_lines(client; idle=3.0)  # window for the async print
+            for line in extra
+                @test startswith(strip(line), "{")              # never raw worker output
+                @test JSON3.read(line, Dict{String,Any}) isa Dict  # every line is valid JSON-RPC
+            end
+            @test !any(l -> occursin("LEAK", l), extra)         # marker never hit the transport
+
+            # transport still intact afterwards
+            resp2 = call_tool!(client, "eval", Dict("code" => "2+2"); timeout=30.0)
+            @test occursin("4", get_tool_text(resp2))
+        end
 
         # --- reset tool (run last since it kills the worker) ---
         @testset "reset" begin

@@ -39,7 +39,7 @@ Call `session` with the appropriate action and name parameters.
 ## Session Lifecycle
 
 1. Sessions start with no worker — workers spawn lazily on first `eval`
-2. Each session gets its own Distributed.jl worker process
+2. Each session gets its own Malt.jl worker process
 3. Variables, packages, and project environment are fully isolated between sessions
 4. Revise.jl is auto-loaded on each worker if available
 5. The "default" session is auto-created if you use `eval` without creating a session first

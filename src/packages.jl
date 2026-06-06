@@ -12,7 +12,7 @@ Supports:
 """
 function activate_project_on_worker!(path::String; session_name::Union{String,Nothing}=nothing)
     session = resolve_session(session_name)
-    worker_id = ensure_worker!(session)
+    worker = ensure_worker!(session)
 
     # Handle shared environment syntax (@v1.12, @myenv, etc.)
     # The @ prefix syntax only works in Pkg REPL mode, not programmatically
@@ -41,7 +41,7 @@ function activate_project_on_worker!(path::String; session_name::Union{String,No
     end
 
     try
-        result = remotecall_fetch(Core.eval, worker_id, Main, activate_expr)
+        result = _remote_eval_fetch(worker, activate_expr)
         if result.success
             session.project_path = result.project
             session.workspace_path = result.project
@@ -60,7 +60,7 @@ Run a Pkg action on the worker process.
 """
 function run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; session_name::Union{String,Nothing}=nothing)
     session = resolve_session(session_name)
-    worker_id = ensure_worker!(session)
+    worker = ensure_worker!(session)
 
     pkg_expr = quote
         let act = $action, pkgs = $pkg_list
@@ -110,7 +110,7 @@ function run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; sess
     end
 
     try
-        return remotecall_fetch(Core.eval, worker_id, Main, pkg_expr)
+        return _remote_eval_fetch(worker, pkg_expr)
     catch e
         _handle_worker_crash!(session, e)
         return (error = "Worker communication failed during Pkg.$action: $(sprint(showerror, e))",

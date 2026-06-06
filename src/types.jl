@@ -8,7 +8,7 @@ project environment, and Revise.jl tracking state.
 
 # Fields
 - `name::String`: Session name (e.g., "default", "analysis", "testing") — must not be empty, immutable after construction
-- `worker_id::Union{Int, Nothing}`: Distributed.jl worker process ID
+- `worker::Union{Malt.Worker, Nothing}`: The session's Malt worker (a handle to a separate Julia process), or `nothing` until spawned
 - `project_path::Union{String, Nothing}`: Active project/environment path (persists across resets)
 - `workspace_path::Union{String, Nothing}`: Project directory restored on worker spawn/reset (set by activate, not updated by eval cd() calls)
 - `socket_path::Union{String, Nothing}`: Unix domain socket path for the interactive REPL server
@@ -16,10 +16,11 @@ project environment, and Revise.jl tracking state.
 - `created_at::Float64`: Session creation time (from `time()`)
 - `last_used::Float64`: Last time this session was used (from `time()`)
 - `eval_timings::Vector{Float64}`: Ring buffer of recent eval durations (capped at `MAX_EVAL_TIMINGS`)
+- `worker_notes::Vector{String}`: Non-fatal setup warnings from the current worker spawn (e.g. Revise failed to load, project activation failed) — surfaced in `info` and on the next eval, then cleared
 """
 mutable struct SessionState
     const name::String
-    worker_id::Union{Int, Nothing}
+    worker::Union{Malt.Worker, Nothing}
     project_path::Union{String, Nothing}
     workspace_path::Union{String, Nothing}
     socket_path::Union{String, Nothing}
@@ -27,11 +28,12 @@ mutable struct SessionState
     created_at::Float64
     last_used::Float64
     eval_timings::Vector{Float64}
+    worker_notes::Vector{String}
 
-    function SessionState(name::String, worker_id::Union{Int,Nothing}, project_path::Union{String,Nothing}, revise_loaded::Bool=false)
+    function SessionState(name::String, worker::Union{Malt.Worker,Nothing}, project_path::Union{String,Nothing}, revise_loaded::Bool=false)
         isempty(name) && error("Session name must not be empty")
         now = time()
-        new(name, worker_id, project_path, nothing, nothing, revise_loaded, now, now, Float64[])
+        new(name, worker, project_path, nothing, nothing, revise_loaded, now, now, Float64[], String[])
     end
 end
 

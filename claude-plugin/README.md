@@ -64,7 +64,7 @@ All tools except `log_viewer` and `session` accept an optional `session` paramet
 
 AgentREPL uses a **multi-session worker subprocess model**:
 - The MCP server runs in the main Julia process
-- Each session has its own worker process (via Distributed.jl)
+- Each session has its own worker process (via Malt.jl)
 - Workers are isolated: separate state, packages, project environments
 - Revise.jl is auto-loaded on each worker for hot-reloading
 - `reset` kills a session's worker and spawns a fresh one

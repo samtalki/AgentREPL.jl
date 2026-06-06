@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Worker backend switched from Distributed.jl to [Malt.jl](https://github.com/JuliaPluto/Malt.jl).** Each session is now a `Malt.Worker`. Malt keeps worker stdout/stderr on private pipes, so worker output can no longer reach the stdout MCP JSON-RPC transport; the pipes are drained to the server's stderr. Removes Distributed's global cluster state and replaces hand-rolled lifecycle/crash handling with Malt's `stop`/`isrunning`/`interrupt`/`TerminatedWorkerException`. `info` and `session` now report the worker OS pid instead of a cluster id.
+
+### Added
+- **MCP resources** exposing live session state for clients to read/@-mention without an extra tool call: `agentrepl://sessions`, `agentrepl://session/variables`, `agentrepl://session/info`, `agentrepl://session/project`, `agentrepl://session/log`.
+- **Tool titles** on all eight tools (human-friendly display names in the client).
+- **Surfaced worker-setup failures**: Revise-load and project-activation failures are recorded in the session and shown in `info` and the next eval result, instead of only being logged to stderr.
+- **Transport-cleanliness regression test** (E2E) asserting worker output never reaches the JSON-RPC stream, plus an E2E job in CI (`AGENTREPL_E2E=true` on Julia 1.12).
+
+### Fixed
+- Server now declares only the capabilities it implements (Tools + Resources), instead of the framework default that advertised resource subscriptions and prompts it does not serve.
+- `info` no longer lists internal temporaries as user variables (the introspection expression is scoped and a baseline of `Main` symbols is excluded).
+
 ## [0.6.0] - 2026-03-23
 
 ### Added

@@ -70,12 +70,25 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
     session_tool = create_session_tool()
     revise_tool = create_revise_tool()
 
+    # Resources expose live session state (variables, info, project, log) to the client.
+    resources = agentrepl_resources()
+
+    # Declare only the capabilities we actually implement. The framework default
+    # advertises resource subscriptions and prompts we don't serve; override it so
+    # clients see an accurate picture.
+    capabilities = ModelContextProtocol.Capability[
+        ModelContextProtocol.ToolCapability(list_changed=false),
+        ModelContextProtocol.ResourceCapability(list_changed=false, subscribe=false),
+    ]
+
     # Create and start the server
     server = mcp_server(
         name = "julia-repl",
         version = "0.6.0",
         description = "Persistent Julia REPL for AI agents - multi-session with Revise.jl hot-reloading",
-        tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool, log_viewer_tool, session_tool, revise_tool]
+        tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool, log_viewer_tool, session_tool, revise_tool],
+        resources = resources,
+        capabilities = capabilities
     )
 
     @info "AgentREPL server starting..." julia_version=VERSION

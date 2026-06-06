@@ -6,7 +6,7 @@
 Check if Revise.jl is loaded on the session's worker.
 """
 function is_revise_available(session::SessionState)
-    return session.revise_loaded && session.worker_id !== nothing && session.worker_id in workers()
+    return session.revise_loaded && session.worker !== nothing && Malt.isrunning(session.worker)
 end
 
 _revise_unavailable_msg(session::SessionState) =
@@ -24,7 +24,7 @@ function revise_on_worker!(session::SessionState)
     end
 
     try
-        result = remotecall_fetch(Core.eval, session.worker_id, Main, quote
+        result = _remote_eval_fetch(session.worker, quote
             try
                 Revise.revise()
                 (success = true, message = "Revise completed — all tracked file changes have been loaded.")
@@ -61,7 +61,7 @@ function _revise_file_action(session::SessionState, filepath::String, action::Sy
         "Included and tracking '$(filepath)'. Changes will be auto-loaded on revise()."
 
     try
-        result = remotecall_fetch(Core.eval, session.worker_id, Main, quote
+        result = _remote_eval_fetch(session.worker, quote
             let fp = $filepath
                 try
                     $action_expr
@@ -108,7 +108,7 @@ function get_revise_status(session::SessionState)
     end
 
     try
-        result = remotecall_fetch(Core.eval, session.worker_id, Main, quote
+        result = _remote_eval_fetch(session.worker, quote
             try
                 watched = String[]
                 # NOTE: Revise.watched_files and Revise.pkgdatas are internal APIs,

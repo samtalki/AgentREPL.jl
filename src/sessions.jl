@@ -94,7 +94,7 @@ function list_sessions()
     for (name, session) in SESSIONS.sessions
         push!(results, (
             name = name,
-            worker_id = session.worker_id,
+            worker_id = worker_pid(session),
             project = session.project_path,
             revise = session.revise_loaded,
             is_current = (name == SESSIONS.current),
@@ -137,13 +137,17 @@ Kill all worker processes across all sessions. Called via atexit() hook
 to prevent orphan Julia processes when the MCP server exits.
 """
 function _cleanup_all_workers!()
-    # Batch rmprocs so total wait is bounded at 5s regardless of session count
-    ids = Int[s.worker_id for (_, s) in SESSIONS.sessions
-              if s.worker_id !== nothing && s.worker_id in workers()]
-    try
-        isempty(ids) || rmprocs(ids; waitfor=5.0)
-    catch e
-        try; println(stderr, "AgentREPL: failed to clean up workers $ids: ", sprint(showerror, e)); catch; end
+    # Stop all workers concurrently so total wait stays bounded regardless of
+    # session count (Malt.stop escalates exit → SIGTERM → SIGKILL per worker).
+    @sync for (_, s) in SESSIONS.sessions
+        if s.worker !== nothing && Malt.isrunning(s.worker)
+            w = s.worker
+            @async try
+                Malt.stop(w; exit_timeout=2.0, term_timeout=2.0)
+            catch e
+                try; println(stderr, "AgentREPL: failed to stop a worker: ", sprint(showerror, e)); catch; end
+            end
+        end
     end
     for (_, s) in SESSIONS.sessions
         _clear_worker_state!(s)

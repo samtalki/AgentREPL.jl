@@ -5,8 +5,8 @@ authors = ["Samuel Talkington <talkington@pm.me>"]
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
-Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 JuliaSyntaxHighlighting = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
+Malt = "36869731-bdee-424d-aa32-cab38c994e3b"
 ModelContextProtocol = "c58f755f-f2a7-4f48-bf29-4e9659b78499"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
@@ -14,9 +14,9 @@ UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
 [compat]
 Aqua = "0.8"
 Dates = "1"
-Distributed = "1"
 JSON3 = "1"
 JuliaSyntaxHighlighting = "1"
+Malt = "1.4"
 ModelContextProtocol = "0.4"
 Pkg = "1"
 Revise = "3"

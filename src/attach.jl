@@ -23,14 +23,14 @@ Protocol (line-based, base64-encoded):
 
 Socket cleanup relies on worker kill — no explicit server stop mechanism exists.
 listen() and chmod() run synchronously before the @async accept loop, so start
-failures are detected immediately by remotecall_fetch.
+failures are detected immediately by remote_eval_fetch.
 
 Note: The interactive REPL and MCP eval share the same worker process. Concurrent
 evaluation from both paths may produce interleaved stdout/stderr output.
 """
 function _start_repl_socket_server!(session::SessionState)
-    worker_id = session.worker_id
-    worker_id === nothing && error("Session '$(session.name)' has no worker. Call eval first to spawn one.")
+    worker = session.worker
+    (worker === nothing || !Malt.isrunning(worker)) && error("Session '$(session.name)' has no running worker. Call eval first to spawn one.")
 
     sock_path = _socket_path(session.name)
 
@@ -107,7 +107,7 @@ function _start_repl_socket_server!(session::SessionState)
     end
 
     try
-        result = remotecall_fetch(Core.eval, worker_id, Main, server_expr)
+        result = _remote_eval_fetch(worker, server_expr)
         session.socket_path = sock_path
         return sock_path
     catch e

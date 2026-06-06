@@ -26,13 +26,15 @@ JULIA_REPL_PROJECT=/path/to/project julia --project=. bin/julia-repl-server
 
 ### Multi-Session Worker Subprocess Model
 
-AgentREPL uses a **multi-session worker subprocess architecture** (via Distributed.jl):
+AgentREPL uses a **multi-session worker subprocess architecture** (via [Malt.jl](https://github.com/JuliaPluto/Malt.jl)):
 - The MCP server runs in the main Julia process
-- Each named session has its own worker process for code evaluation
+- Each named session has its own `Malt.Worker` process for code evaluation
 - Sessions are isolated: separate variables, packages, and project environments
 - `reset` kills a session's worker and spawns a fresh one (true hard reset)
 - `activate` switches a session's active project/environment
 - Revise.jl is auto-loaded on workers for hot-reloading support
+
+**Why Malt, not Distributed.jl**: Malt spawns workers with `monitor_stdout=false`/`monitor_stderr=false`, so worker output goes to private pipes (drained to the server's stderr by `_start_output_drain!`) and can never reach the main process's stdout — which is the MCP JSON-RPC transport. Malt also has no global cluster state (each `Worker` is an independent object) and provides graceful `stop` (exit → SIGTERM → SIGKILL), `isrunning`, `interrupt`, and `TerminatedWorkerException`, replacing hand-rolled Distributed lifecycle code. IPC is `Malt.remote_eval_fetch(Main, w, expr)` via the `_remote_eval_fetch` helper.
 
 ### File Structure
 
@@ -43,12 +45,14 @@ src/
   highlighting.jl        # Julia syntax highlighting (uses JuliaSyntaxHighlighting.jl)
   formatting.jl          # Result formatting, stacktrace truncation
   sessions.jl            # Multi-session lifecycle (create, switch, list, destroy)
-  worker.jl              # Distributed worker lifecycle (ensure_worker!, capture_eval_on_worker)
+  worker.jl              # Malt worker lifecycle (ensure_worker!, capture_eval_on_worker, output drain)
   revise.jl              # Revise.jl integration (revise, track, includet on workers)
   packages.jl            # Pkg actions, project activation
-  logging.jl             # Log viewer functionality
+  logging.jl             # Log viewer + persistent audit logging
+  attach.jl              # Interactive shared REPL (Unix socket server on worker + tmux client)
   tools.jl               # MCP tool definitions (8 tools)
-  server.jl              # start_server function
+  resources.jl           # MCP resources (session variables, info, project, log, sessions)
+  server.jl              # start_server function (registers tools + resources, declares capabilities)
 ```
 
 ### Syntax Highlighting
@@ -108,13 +112,17 @@ All tools except `log_viewer` and `session` accept an optional `session` paramet
 
 ### Key Design Decisions
 
-- **Multi-session model**: Each session has its own Distributed.jl worker with isolated state
-- **Revise.jl auto-loading**: Workers attempt `using Revise` on startup (graceful degradation)
+- **Multi-session model**: Each session has its own `Malt.Worker` with isolated state
+- **Revise.jl auto-loading**: Workers attempt `using Revise` on startup (graceful degradation); a load failure is recorded in `session.worker_notes` and surfaced in `info` / the next eval rather than only logged
 - **Lazy worker spawning**: Worker created on first tool use, not at server startup
-- **Expression-based IPC**: Uses `remotecall_fetch(Core.eval, worker_id, Main, expr)` to avoid serialization issues
+- **Expression-based IPC**: Uses `_remote_eval_fetch(w, expr)` (= `Malt.remote_eval_fetch(Main, w, expr)`) to avoid closure serialization issues
+- **Transport isolation**: Workers run with `monitor_stdout/stderr=false`; `_start_output_drain!` drains their pipes to the server's stderr so worker output never corrupts the stdout JSON-RPC stream. `get_worker_info` snapshots a baseline of `Main` symbols at spawn so Malt's own worker-loop globals don't show up as user variables
+- **Capabilities**: `start_server` declares only Tools + Resources (no prompts, no resource subscriptions) instead of the framework default, which over-advertises
 - **STDIO transport only**: No network ports for security
 - **Environment persistence**: Activated environment survives reset
 - **Output-then-result formatting**: Shows stdout first, then result/error, then timing — optimized for collapsed view UX
+
+**Framework limitations (would need a ModelContextProtocol.jl PR):** the `MCPTool` struct has no `annotations` field and `handle_list_tools` does not serialize one, so tool hints (`readOnlyHint`/`destructiveHint`) are not available — only `title` is. There is no tool `output_schema`/`structuredContent` support, so tools return text and richer structured state is exposed via **resources** instead.
 
 ## Testing
 

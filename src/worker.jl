@@ -1,10 +1,47 @@
-# worker.jl - Distributed worker lifecycle management
+# worker.jl - Malt worker lifecycle management
+
+"""
+    _remote_eval_fetch(w::Malt.Worker, expr) -> Any
+
+Evaluate `expr` in `Main` on worker `w` and return the result. Thin wrapper over
+`Malt.remote_eval_fetch` so every call site uses one spelling of the IPC.
+"""
+_remote_eval_fetch(w::Malt.Worker, expr) = Malt.remote_eval_fetch(Main, w, expr)
+
+"""
+    worker_pid(session::SessionState) -> Union{Int,Nothing}
+
+OS process id of the session's worker, or `nothing` if no worker is running.
+Used for display (Malt workers have no integer cluster id like Distributed).
+"""
+worker_pid(session::SessionState) =
+    session.worker === nothing ? nothing : Int(Base.getpid(session.worker.proc))
+
+"""
+    _one_line(e) -> String
+
+First line of an exception's message, for compact session notes.
+"""
+_one_line(e) = first(split(sprint(showerror, e), '\n'; limit=2))
+
+"""
+    _crash_message(e) -> String
+
+User-facing message for an exception raised while talking to the worker. A
+terminated worker (crash or `exit()`) gets a clear note instead of the raw
+`Malt.TerminatedWorkerException()`.
+"""
+_crash_message(e) =
+    e isa Malt.TerminatedWorkerException ?
+        "Worker process terminated (it crashed or called exit()). A fresh worker will spawn on the next eval." :
+        sprint(showerror, e)
 
 """
     _clear_worker_state!(session::SessionState)
 
 Clear worker-related fields on a session. Centralizes the paired reset of
-`worker_id` and `revise_loaded` so every call site stays consistent.
+`worker`, `revise_loaded`, notes, and the interactive socket so every call site
+stays consistent.
 """
 function _clear_worker_state!(session::SessionState)
     # Clean up socket file from interactive REPL
@@ -16,37 +53,72 @@ function _clear_worker_state!(session::SessionState)
         end
         session.socket_path = nothing
     end
-    session.worker_id = nothing
+    session.worker = nothing
     session.revise_loaded = false
     empty!(session.eval_timings)
+    empty!(session.worker_notes)
 end
 
 """
     _handle_worker_crash!(session::SessionState, e)
 
-Reset session worker state if `e` indicates a dead worker.
-Handles both `ProcessExitedException` and `RemoteException` (when the worker
-is no longer in `workers()`).
+Reset session worker state if `e` indicates a dead worker. Handles
+`Malt.TerminatedWorkerException` and the case where the worker stopped running.
 """
 function _handle_worker_crash!(session::SessionState, e)
-    if e isa Distributed.ProcessExitedException
+    if e isa Malt.TerminatedWorkerException
         _clear_worker_state!(session)
-    elseif session.worker_id !== nothing && !(session.worker_id in workers())
+    elseif session.worker !== nothing && !Malt.isrunning(session.worker)
         _clear_worker_state!(session)
     end
 end
 
 """
-    ensure_worker!(session::SessionState; _retry_without_revise::Bool=false) -> Int
+    _start_output_drain!(session_name::String, w::Malt.Worker)
+
+Drain the worker's stdout/stderr pipes so out-of-band output (async tasks,
+finalizers, background prints that fire outside an eval's capture window) cannot
+fill the pipe buffer and block the worker.
+
+The worker is spawned with `monitor_stdout=false`/`monitor_stderr=false`, so Malt
+does NOT reprint worker output onto the host's stdout — which is the MCP JSON-RPC
+transport. We route drained lines to our own stderr (safe: never the transport),
+where Claude Code collects them in the MCP server log. In-band eval output is
+captured separately by `_with_output_capture` and is unaffected.
+"""
+function _start_output_drain!(session_name::String, w::Malt.Worker)
+    for (pipe, label) in ((w.stdout, "stdout"), (w.stderr, "stderr"))
+        @async begin
+            try
+                while Malt.isrunning(w)
+                    eof(pipe) && break          # blocks until a byte or EOF; no busy-spin
+                    line = readline(pipe)
+                    isempty(line) && continue
+                    try
+                        println(stderr, "[worker:$session_name:$label] ", line)
+                    catch
+                    end
+                end
+            catch
+                # pipe closed / worker gone — drain task exits quietly
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    ensure_worker!(session::SessionState; _retry_without_revise::Bool=false) -> Malt.Worker
 
 Ensure a worker process exists for the given session, creating one if needed.
-Returns the worker ID. Also attempts to load Revise.jl on the worker.
+Returns the worker. Also attempts to load Revise.jl on the worker.
 
 The `_retry_without_revise` flag is internal — it prevents unbounded recursion
 when Revise.jl consistently crashes the worker process.
 """
 function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false)
-    if session.worker_id === nothing || !(session.worker_id in workers())
+    if session.worker === nothing || !Malt.isrunning(session.worker)
+        empty!(session.worker_notes)
         project_dir = try
             dirname(Pkg.project().path)
         catch e
@@ -54,39 +126,44 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
             e isa OutOfMemoryError && rethrow()
             error("Cannot determine project directory for session '$(session.name)'. Ensure Julia is started with --project=<path>.")
         end
-        new_workers = try
-            addprocs(1; exeflags=`--project=$project_dir`)
+
+        w = try
+            Malt.Worker(; exeflags=["--project=$project_dir"],
+                          monitor_stdout=false, monitor_stderr=false)
         catch e
             error("Failed to spawn worker for session '$(session.name)': $(sprint(showerror, e))")
         end
-        session.worker_id = first(new_workers)
+        session.worker = w
+        _start_output_drain!(session.name, w)
 
-        # Core.eval avoids closure serialization issues with remotecall
+        # Load Pkg — required. A failure here means the worker is unusable.
         try
-            remotecall_fetch(Core.eval, session.worker_id, Main, :(using Pkg))
+            _remote_eval_fetch(w, :(using Pkg))
         catch e
             @warn "Failed to load Pkg on worker, killing half-initialized worker" session=session.name exception=(e, catch_backtrace())
-            orphan_id = session.worker_id
+            try; Malt.stop(w); catch; end
             _clear_worker_state!(session)
-            try; rmprocs(orphan_id); catch; end
             rethrow()
         end
 
+        # Load Revise — optional. Degrade gracefully and record a note.
         if !_retry_without_revise
             try
-                remotecall_fetch(Core.eval, session.worker_id, Main, :(using Revise))
+                _remote_eval_fetch(w, :(using Revise))
                 session.revise_loaded = true
             catch e
                 session.revise_loaded = false
-                if e isa Distributed.RemoteException || e isa Distributed.ProcessExitedException
-                    @warn "Worker may have crashed while loading Revise.jl" session=session.name exception=(e, catch_backtrace())
+                push!(session.worker_notes,
+                    "Revise.jl not loaded ($(_one_line(e))). Hot-reload is disabled; add it with pkg(action=\"add\", packages=\"Revise\").")
+                if e isa Malt.RemoteException
+                    @warn "Could not load Revise.jl on worker" session=session.name
                 else
                     @warn "Unexpected error loading Revise.jl on worker" session=session.name exception=(e, catch_backtrace())
                 end
             end
 
-            # If Revise loading crashed the worker, respawn once without Revise
-            if session.worker_id !== nothing && !(session.worker_id in workers())
+            # If loading Revise crashed the worker, respawn once without Revise.
+            if session.worker !== nothing && !Malt.isrunning(session.worker)
                 _clear_worker_state!(session)
                 return ensure_worker!(session; _retry_without_revise=true)
             end
@@ -95,15 +172,17 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
         if session.project_path !== nothing
             try
                 path = session.project_path
-                remotecall_fetch(Core.eval, session.worker_id, Main, :(Pkg.activate($path)))
+                _remote_eval_fetch(w, :(Pkg.activate($path)))
                 # Sync workspace to project directory if not already set
                 if session.workspace_path === nothing
                     session.workspace_path = session.project_path
                 end
             catch e
-                # Intentionally preserve project_path so a transient activation failure
-                # (e.g., missing Manifest.toml) can succeed on next worker spawn after
-                # the user runs pkg(action="instantiate")
+                # Preserve project_path so a transient activation failure (e.g. missing
+                # Manifest.toml) can succeed on next spawn after pkg(instantiate). Record
+                # a note so the user is not silently left in the wrong environment.
+                push!(session.worker_notes,
+                    "Project activation failed for $(session.project_path) ($(_one_line(e))). Running in the default environment — run pkg(action=\"instantiate\") then reset().")
                 @warn "Failed to activate project on worker — will retry on next worker spawn" project=session.project_path error=e
             end
         end
@@ -112,39 +191,50 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
         if session.workspace_path !== nothing
             try
                 wpath = session.workspace_path
-                remotecall_fetch(Core.eval, session.worker_id, Main, :(cd($wpath)))
+                _remote_eval_fetch(w, :(cd($wpath)))
             catch e
+                push!(session.worker_notes, "Workspace directory $(session.workspace_path) could not be restored; cleared.")
                 @warn "Failed to restore workspace on worker, clearing" workspace=session.workspace_path error=e
                 session.workspace_path = nothing
             end
         end
 
+        # Snapshot the worker's Main symbols AFTER setup. Malt runs its worker event
+        # loop in Main, so its internals (serve, handle, MsgID, …) live there alongside
+        # Pkg/Revise; this baseline lets get_worker_info list only user-defined names.
+        try
+            _remote_eval_fetch(w, :(const _AGENTREPL_BASELINE_NAMES = Set(names(Main; all=true))))
+        catch e
+            @debug "Failed to snapshot baseline names on worker" session=session.name exception=e
+        end
+
         session.last_used = time()
     end
-    return session.worker_id
+    return session.worker
 end
 
 """
     kill_worker!(session::SessionState)
 
-Kill the worker process for the given session.
+Stop the worker process for the given session. `Malt.stop` escalates
+exit → SIGTERM → SIGKILL on its own.
 """
 function kill_worker!(session::SessionState)
-    if session.worker_id !== nothing && session.worker_id in workers()
+    if session.worker !== nothing && Malt.isrunning(session.worker)
         try
-            rmprocs(session.worker_id)
+            Malt.stop(session.worker)
         catch e
-            @warn "Failed to cleanly kill worker, attempting interrupt" session=session.name worker_id=session.worker_id exception=(e, catch_backtrace())
-            try; interrupt(session.worker_id); catch; end
+            @warn "Failed to cleanly stop worker, forcing kill" session=session.name exception=(e, catch_backtrace())
+            try; Malt.kill(session.worker); catch; end
         end
     end
     _clear_worker_state!(session)
 end
 
 """
-    reset_worker!(session::SessionState) -> Int
+    reset_worker!(session::SessionState) -> Malt.Worker
 
-Kill the session's worker and spawn a fresh one. Returns the new worker ID.
+Kill the session's worker and spawn a fresh one. Returns the new worker.
 """
 function reset_worker!(session::SessionState)
     kill_worker!(session)
@@ -186,7 +276,7 @@ end
     capture_eval_on_worker(code::String; timeout=nothing, session_name=nothing, isolated=false) -> (value_str, output, error_str, elapsed)
 
 Evaluate Julia code on the worker process, capturing both return value and printed output.
-Uses Core.eval with expressions to avoid closure serialization issues.
+Uses Malt expression evaluation to avoid closure serialization issues.
 
 Returns a 4-tuple: (value_str, output, error_str, elapsed_seconds).
 
@@ -197,7 +287,7 @@ If `isolated` is true, evaluates in a fresh anonymous module instead of Main (va
 function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=nothing,
                                  session_name::Union{String,Nothing}=nothing, isolated::Bool=false)
     session = resolve_session(session_name)
-    worker_id = ensure_worker!(session)
+    worker = ensure_worker!(session)
     session.last_used = time()
 
     # Pass color preference to worker so repr uses ANSI for color-aware types (UnicodePlots, etc.)
@@ -252,19 +342,19 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
 
     elapsed = @elapsed begin
         if timeout === nothing
-            # No timeout: blocking remotecall_fetch with crash protection
+            # No timeout: blocking remote eval with crash protection
             try
-                value_str, output, error_str = remotecall_fetch(Core.eval, worker_id, Main, eval_expr)
+                value_str, output, error_str = _remote_eval_fetch(worker, eval_expr)
             catch e
                 _handle_worker_crash!(session, e)
                 value_str = "nothing"
                 output = ""
-                error_str = sprint(showerror, e)
+                error_str = _crash_message(e)
             end
         else
-            # With timeout: race remotecall against a cancellable Timer
+            # With timeout: race the remote eval against a cancellable Timer
             result_channel = Channel{Any}(1)
-            future = remotecall(Core.eval, worker_id, Main, eval_expr)
+            future = Malt.remote_eval(Main, worker, eval_expr)
 
             # Timer fires after timeout. Race safety comes from the Channel(1) —
             # only the first put! succeeds. close(timer) is best-effort cleanup.
@@ -294,7 +384,7 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
                 _handle_worker_crash!(session, payload)
                 value_str = "nothing"
                 output = ""
-                error_str = sprint(showerror, payload)
+                error_str = _crash_message(payload)
             else  # :timeout
                 kill_worker!(session)
                 value_str = "nothing"
@@ -316,62 +406,64 @@ end
 Get information about the given session's worker.
 """
 function get_worker_info(session::SessionState)
-    worker_id = ensure_worker!(session)
+    worker = ensure_worker!(session)
 
+    # Wrapped in `let` so these temporaries don't leak into the worker's Main
+    # (which would then show up as bogus "user variables").
     info_expr = quote
-        # Get user-defined symbols with type and size info
-        all_names = names(Main; all=true)
-        protected = Set([:Base, :Core, :Main, :ans, :include, :eval, :Pkg, :Revise])
-        user_vars = NamedTuple{(:name, :type, :size), Tuple{Symbol, String, String}}[]
-        for name in all_names
-            name_str = string(name)
-            if !startswith(name_str, "#") && !startswith(name_str, "_") && !(name in protected)
-                val = try; Core.eval(Main, name); catch; nothing; end
-                type_str = try; string(typeof(val)); catch; "?"; end
-                size_str = try
-                    if applicable(size, val) && !(val isa AbstractString)
-                        s = size(val)
-                        if !isempty(s)
-                            length(s) > 1 ? string(s) : "length=$(length(val))"
+        let
+            all_names = names(Main; all=true)
+            protected = Set([:Base, :Core, :Main, :ans, :include, :eval, :Pkg, :Revise])
+            baseline = isdefined(Main, :_AGENTREPL_BASELINE_NAMES) ? Main._AGENTREPL_BASELINE_NAMES : Set{Symbol}()
+            user_vars = NamedTuple{(:name, :type, :size), Tuple{Symbol, String, String}}[]
+            for name in all_names
+                name_str = string(name)
+                if !startswith(name_str, "#") && !startswith(name_str, "_") && !(name in protected) && !(name in baseline)
+                    val = try; Core.eval(Main, name); catch; nothing; end
+                    type_str = try; string(typeof(val)); catch; "?"; end
+                    size_str = try
+                        if applicable(size, val) && !(val isa AbstractString)
+                            s = size(val)
+                            if !isempty(s)
+                                length(s) > 1 ? string(s) : "length=$(length(val))"
+                            else
+                                ""
+                            end
+                        elseif applicable(length, val)
+                            "length=$(length(val))"
                         else
                             ""
                         end
-                    elseif applicable(length, val)
-                        "length=$(length(val))"
-                    else
+                    catch
                         ""
                     end
-                catch
-                    ""
+                    push!(user_vars, (name=name, type=type_str, size=size_str))
                 end
-                push!(user_vars, (name=name, type=type_str, size=size_str))
             end
-        end
 
-        # Get project path
-        project_path = try
-            dirname(Pkg.project().path)
-        catch
-            "(no project)"
-        end
+            project_path = try
+                dirname(Pkg.project().path)
+            catch
+                "(no project)"
+            end
 
-        # Get loaded modules count
-        loaded_count = try
-            length(keys(Base.loaded_modules))
-        catch
-            0
-        end
+            loaded_count = try
+                length(keys(Base.loaded_modules))
+            catch
+                0
+            end
 
-        (
-            version = string(VERSION),
-            project = project_path,
-            variables = user_vars,
-            modules = loaded_count
-        )
+            (
+                version = string(VERSION),
+                project = project_path,
+                variables = user_vars,
+                modules = loaded_count
+            )
+        end
     end
 
     try
-        return remotecall_fetch(Core.eval, worker_id, Main, info_expr)
+        return _remote_eval_fetch(worker, info_expr)
     catch e
         _handle_worker_crash!(session, e)
         rethrow()

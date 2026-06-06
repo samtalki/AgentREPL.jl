@@ -54,3 +54,23 @@ jobs:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  e2e:
+    name: E2E MCP protocol (Julia 1.12 - ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+          arch: x64
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      # Spawns a real server subprocess and drives it over JSON-RPC (test_mcp_protocol.jl,
+      # including the transport-cleanliness regression test).
+      - uses: julia-actions/julia-runtest@v1
+        env:
+          AGENTREPL_E2E: 'true'

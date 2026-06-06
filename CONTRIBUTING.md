@@ -139,11 +139,11 @@ Understanding the architecture will help you contribute effectively:
 
 ### Worker Subprocess Model
 
-AgentREPL uses Distributed.jl to spawn a worker subprocess:
+AgentREPL uses [Malt.jl](https://github.com/JuliaPluto/Malt.jl) to spawn a worker subprocess:
 
 ```
 Main Process (MCP Server)
-    ↕ remotecall_fetch via Distributed.jl
+    ↕ Malt.remote_eval_fetch (via _remote_eval_fetch)
 Worker Process (Code Evaluation)
 ```
 
@@ -160,7 +160,7 @@ Key benefits:
 | `src/types.jl` | State structs (SessionState, SessionRegistry, etc.) |
 | `src/tools.jl` | MCP tool definitions (8 tools) |
 | `src/sessions.jl` | Multi-session lifecycle management |
-| `src/worker.jl` | Distributed worker lifecycle |
+| `src/worker.jl` | Malt worker lifecycle |
 | `src/revise.jl` | Revise.jl integration |
 | `src/highlighting.jl` | Syntax highlighting |
 | `src/formatting.jl` | Result formatting, stacktrace truncation |

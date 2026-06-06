@@ -1,6 +1,5 @@
 using Test
 using AgentREPL
-using Distributed
 using Aqua
 
 @testset "AgentREPL.jl" begin
