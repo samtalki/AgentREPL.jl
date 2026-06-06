@@ -83,25 +83,31 @@ function send_notification!(client::MCPClient, method::String, params::Dict=Dict
     flush(client.input)
 end
 
-function recv_response(client::MCPClient; timeout::Float64=60.0)
+function recv_response(client::MCPClient; timeout::Float64=60.0, id::Union{Int,Nothing}=nothing)
     deadline = time() + timeout
     while true
         remaining = deadline - time()
-        remaining <= 0 && error("Timeout ($(timeout)s) reading from MCP server")
+        remaining <= 0 && error("Timeout ($(timeout)s) waiting for response id=$(id)")
 
         line = _next_line(client, remaining)
-        line === nothing && error("Timeout ($(timeout)s) or EOF reading from MCP server")
+        line === nothing && error("Timeout ($(timeout)s) or EOF waiting for response id=$(id)")
 
         # Skip any non-JSON line (defensive — the transport should be clean JSON).
         startswith(strip(line), "{") || continue
-        return JSON3.read(line, Dict{String,Any})
+        msg = JSON3.read(line, Dict{String,Any})
+        # When an id is given, skip notifications and responses for other requests.
+        # This keeps one slow call (whose response arrives after its timeout) from
+        # desyncing the stream and poisoning every later call.
+        if id !== nothing
+            (haskey(msg, "id") && msg["id"] == id) || continue
+        end
+        return msg
     end
 end
 
 function call_tool!(client::MCPClient, name::String, arguments::Dict=Dict(); timeout::Float64=60.0)
-    send_request!(client, "tools/call", Dict("name" => name, "arguments" => arguments))
-    resp = recv_response(client; timeout=timeout)
-    return resp
+    id = send_request!(client, "tools/call", Dict("name" => name, "arguments" => arguments))
+    return recv_response(client; timeout=timeout, id=id)
 end
 
 function get_tool_text(resp)
@@ -143,12 +149,14 @@ end
     try
         # --- Initialize handshake ---
         @testset "Initialize handshake" begin
-            send_request!(client, "initialize", Dict(
+            id = send_request!(client, "initialize", Dict(
                 "capabilities" => Dict(),
                 "clientInfo" => Dict("name" => "test-client", "version" => "1.0"),
                 "protocolVersion" => "2025-06-18"
             ))
-            resp = recv_response(client; timeout=30.0)
+            # Generous: the server subprocess cold-starts (loads the package + deps)
+            # before it can answer, which is slow on CI runners.
+            resp = recv_response(client; timeout=180.0, id=id)
             @test haskey(resp, "result")
             @test resp["result"]["serverInfo"]["name"] == "julia-repl"
             @test haskey(resp["result"], "protocolVersion")
@@ -165,8 +173,8 @@ end
 
         # --- List tools ---
         @testset "List tools" begin
-            send_request!(client, "tools/list", Dict())
-            resp = recv_response(client; timeout=10.0)
+            id = send_request!(client, "tools/list", Dict())
+            resp = recv_response(client; timeout=30.0, id=id)
             tools = resp["result"]["tools"]
             tool_names = Set([t["name"] for t in tools])
             expected = Set(["eval", "reset", "info", "pkg", "activate", "log_viewer", "session", "revise"])
@@ -274,8 +282,8 @@ end
 
         # --- resources ---
         @testset "resources - list" begin
-            send_request!(client, "resources/list", Dict())
-            resp = recv_response(client; timeout=10.0)
+            id = send_request!(client, "resources/list", Dict())
+            resp = recv_response(client; timeout=30.0, id=id)
             uris = Set([r["uri"] for r in resp["result"]["resources"]])
             @test "agentrepl://session/info" in uris
             @test "agentrepl://session/variables" in uris
@@ -283,8 +291,8 @@ end
         end
 
         @testset "resources - read info" begin
-            send_request!(client, "resources/read", Dict("uri" => "agentrepl://session/info"))
-            resp = recv_response(client; timeout=60.0)
+            id = send_request!(client, "resources/read", Dict("uri" => "agentrepl://session/info"))
+            resp = recv_response(client; timeout=60.0, id=id)
             contents = resp["result"]["contents"]
             @test !isempty(contents)
             payload = JSON3.read(contents[1]["text"], Dict{String,Any})
