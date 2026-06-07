@@ -164,6 +164,67 @@ function _start_output_drain!(session::SessionState, w::Malt.Worker)
 end
 
 """
+    _tee_status!(session::SessionState, msg::String)
+
+Route a single status line the same safe ways as drained worker output: the MCP
+server's stderr, the session's `recent_output` ring, and the live log viewer when
+attached. Never the stdout transport. Used by `_run_with_heartbeat` so long-op
+progress is visible in the log viewer and the `session/log` resource even when the
+client does not render `notifications/progress`.
+"""
+function _tee_status!(session::SessionState, msg::String)
+    tagged = "[worker:$(session.name):progress] " * msg
+    try; println(stderr, tagged); catch; end
+    try
+        push!(session.recent_output, msg)
+        length(session.recent_output) > MAX_RECENT_OUTPUT && popfirst!(session.recent_output)
+    catch; end
+    try
+        if LOG_VIEWER.log_io !== nothing
+            println(LOG_VIEWER.log_io, tagged); flush(LOG_VIEWER.log_io)
+        end
+    catch; end
+    return nothing
+end
+
+"""
+    _run_with_heartbeat(session, worker, expr, label, progress_cb; interval=2.0) -> Any
+
+Evaluate `expr` on `worker` while emitting a heartbeat every `interval` seconds for
+as long as it keeps running. Each heartbeat tees a status line through
+`_tee_status!` and calls `progress_cb(n, message)` (used to emit an MCP
+`notifications/progress`). Returns the worker result; a worker failure is unwrapped
+(`_unwrap`) and rethrown so the caller can classify it.
+
+The eval runs on a child task while the heartbeat runs on the calling task, so only
+the calling task ever writes the transport. The heartbeat stops before this returns,
+so the response write that follows cannot interleave with a notification write.
+"""
+function _run_with_heartbeat(session::SessionState, worker::Malt.Worker, expr,
+                             label::AbstractString, progress_cb; interval::Real=2.0)
+    task = @async _remote_eval_fetch(worker, expr)
+    n = 0
+    t0 = time()
+    while timedwait(() -> istaskdone(task), interval; pollint=0.1) === :timed_out
+        n += 1
+        msg = "$label: still running ($(round(Int, time() - t0))s)"
+        _tee_status!(session, msg)
+        try; progress_cb(n, msg); catch; end
+    end
+    result = try
+        fetch(task)
+    catch e
+        throw(_unwrap(e))
+    end
+    if n > 0
+        msg = "$label: done ($(round(Int, time() - t0))s)"
+        _tee_status!(session, msg)
+        try; progress_cb(n + 1, msg); catch; end
+    end
+    return result
+end
+
+"""
     ensure_worker!(session::SessionState; _retry_without_revise::Bool=false) -> Malt.Worker
 
 Ensure a worker process exists for the given session, creating one if needed.

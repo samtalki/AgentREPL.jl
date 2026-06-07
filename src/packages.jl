@@ -54,11 +54,19 @@ function activate_project_on_worker!(path::String; session_name::Union{String,No
 end
 
 """
-    run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; session_name::Union{String,Nothing}=nothing)
+    run_pkg_action_on_worker(action::String, pkg_list::Vector{String};
+                             session_name=nothing, progress_cb=nothing)
 
 Run a Pkg action on the worker process.
+
+When `progress_cb` is supplied, the action runs through `_run_with_heartbeat`, which
+emits a heartbeat every couple of seconds while the action is in flight (the callback
+receives `(n, message)` and is used to send MCP `notifications/progress`). Without it
+the action runs as a single blocking call, exactly as before.
 """
-function run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; session_name::Union{String,Nothing}=nothing)
+function run_pkg_action_on_worker(action::String, pkg_list::Vector{String};
+                                  session_name::Union{String,Nothing}=nothing,
+                                  progress_cb=nothing)
     session = resolve_session(session_name)
     worker = ensure_worker!(session)
 
@@ -110,7 +118,10 @@ function run_pkg_action_on_worker(action::String, pkg_list::Vector{String}; sess
     end
 
     try
-        return _remote_eval_fetch(worker, pkg_expr)
+        if progress_cb === nothing
+            return _remote_eval_fetch(worker, pkg_expr)
+        end
+        return _run_with_heartbeat(session, worker, pkg_expr, "Pkg.$action", progress_cb)
     catch e
         _handle_worker_crash!(session, e)
         return (error = "Pkg.$action failed — $(_crash_message(e))",
