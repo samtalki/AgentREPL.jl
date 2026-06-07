@@ -1,6 +1,6 @@
 {
   "name": "julia",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Persistent Julia REPL for Claude Code — multi-session with Revise.jl hot-reloading, eliminates TTFX startup penalty",
   "repository": "https://github.com/samtalki/AgentREPL.jl",
   "homepage": "https://github.com/samtalki/AgentREPL.jl",
