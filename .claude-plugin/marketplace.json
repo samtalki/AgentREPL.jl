@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Julia development tools for Claude Code - persistent REPL, multi-session, Revise hot-reloading, modern workflows",
-    "version": "0.7.0"
+    "version": "0.7.1"
   },
   "plugins": [
     {
       "name": "julia",
       "source": "./claude-plugin",
       "description": "Persistent Julia REPL for Claude Code - multi-session with Revise.jl hot-reloading, eliminates TTFX startup penalty",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "author": {
         "name": "Samuel Talkington",
         "email": "talkington@pm.me"

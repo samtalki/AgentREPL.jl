@@ -72,7 +72,7 @@ Julia code in REPL output is syntax highlighted using [JuliaSyntaxHighlighting.j
 
 ### Plotting
 
-UnicodePlots.jl is a dependency loaded on workers (not in the main module). `capture_eval_on_worker` passes the color preference into the worker so `repr` renders color-aware types (UnicodePlots output) with ANSI. The `julia-plot` skill and a PostToolUse eval hook tell the user to expand the tool result (Ctrl+O) for color rather than pasting ANSI art into chat.
+UnicodePlots.jl is a dependency loaded on workers (not in the main module). `capture_eval_on_worker` passes the color preference into the worker so `repr` renders color-aware types (UnicodePlots output) with ANSI. The `julia-plot` skill tells the user to expand the tool result (Ctrl+O) for color rather than pasting ANSI art into chat.
 
 ### Audit Logging
 
@@ -185,7 +185,7 @@ The `claude-plugin/` directory contains the plugin itself; `.claude-plugin/marke
 - Auto-configures the MCP server (no manual `claude mcp add` needed)
 - Provides user-invoked skills: `/julia-reset`, `/julia-info`, `/julia-pkg`, `/julia-activate`, `/julia-log`, `/julia-session`, `/julia-revise`, `/julia-develop`
 - Includes auto-triggering skills: `julia-evaluation` (REPL best practices, in `skills/julia/`) and `julia-plot` (plotting guidance)
-- Has hooks (`claude-plugin/hooks/hooks.json`): PreToolUse on `eval` (require code displayed before running), PostToolUse on Write/Edit (auto-`revise` after `.jl` edits), PostToolUse on `eval` (tell the user to expand the result for color plots instead of pasting ANSI)
+- Has one hook (`claude-plugin/hooks/hooks.json` runs `hooks/revise-nudge.sh`): a non-blocking PostToolUse hook on Write/Edit that injects an `additionalContext` reminder to call `revise` after a `.jl` edit. The guidance to display code before `eval` and to expand plot results for color lives in the `julia-evaluation`/`julia-plot` skills, not hooks.
 
 Install with:
 ```bash

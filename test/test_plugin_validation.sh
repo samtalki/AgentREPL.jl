@@ -72,12 +72,18 @@ fi
 check ".mcp.json references julia-repl-server" \
     "grep -q 'julia-repl-server' '$PLUGIN_DIR/.mcp.json'"
 
-# --- hooks.json has expected hooks ---
-check "hooks.json has PreToolUse hook" \
-    "grep -q 'PreToolUse' '$PLUGIN_DIR/hooks/hooks.json'"
+# --- hooks.json wires the non-blocking revise nudge ---
+check "hooks.json is valid JSON" \
+    "! command -v python3 >/dev/null 2>&1 || python3 -c \"import json; json.load(open('$PLUGIN_DIR/hooks/hooks.json'))\" 2>/dev/null"
 
 check "hooks.json has PostToolUse hook" \
     "grep -q 'PostToolUse' '$PLUGIN_DIR/hooks/hooks.json'"
+
+check "hooks.json references revise-nudge.sh" \
+    "grep -q 'revise-nudge.sh' '$PLUGIN_DIR/hooks/hooks.json'"
+
+check "revise-nudge.sh exists" \
+    "[ -f '$PLUGIN_DIR/hooks/revise-nudge.sh' ]"
 
 # --- Server entry point exists ---
 check "bin/julia-repl-server exists" \

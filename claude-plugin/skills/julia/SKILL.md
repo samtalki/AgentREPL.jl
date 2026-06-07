@@ -1,7 +1,7 @@
 ---
 name: julia-evaluation
 description: Activates when user asks to run, evaluate, or test Julia code in a persistent REPL session, or mentions Julia REPL, Julia session, or hot-reloading Julia changes.
-version: 0.7.0
+version: 0.7.1
 ---
 
 # Julia REPL — Behavioral Rules
@@ -26,7 +26,7 @@ Prefer `revise` — it preserves session state. Only `reset` when required.
 | Struct layout (Julia < 1.12) | `reset` required |
 | Corrupted state / stuck code | `reset` required |
 
-After editing `.jl` files, call `revise(action="revise")` to hot-reload (the PostToolUse hook may do this automatically).
+After editing `.jl` files, call `revise(action="revise")` to hot-reload (a PostToolUse hook reminds you after `.jl` edits).
 
 ## Error Recovery
 
