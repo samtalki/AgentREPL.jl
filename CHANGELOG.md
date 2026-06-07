@@ -7,17 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-07
+
 ### Changed
 - **Worker backend switched from Distributed.jl to [Malt.jl](https://github.com/JuliaPluto/Malt.jl).** Each session is now a `Malt.Worker`. Malt keeps worker stdout/stderr on private pipes, so worker output can no longer reach the stdout MCP JSON-RPC transport; the pipes are drained to the server's stderr. Removes Distributed's global cluster state and replaces hand-rolled lifecycle/crash handling with Malt's `stop`/`isrunning`/`TerminatedWorkerException`. `info` and `session` now report the worker OS pid instead of a cluster id.
 
 ### Added
 - **MCP resources** exposing live session state for clients to read/@-mention without an extra tool call: `agentrepl://sessions`, `agentrepl://session/variables`, `agentrepl://session/info`, `agentrepl://session/project`, `agentrepl://session/log`.
+- **MCP prompts** exposing reusable Julia workflows as slash commands that work without the plugin: `julia-dev-setup`, `julia-benchmark`, `julia-debug-error`. The server declares `PromptCapability`.
+- **Visible out-of-band worker output**: drained worker lines (spawn-time precompile, async prints, long `pkg`/precompile progress) are kept in a per-session `recent_output` ring and surfaced via the `agentrepl://session/log` resource and the live log viewer.
 - **Tool titles** on all eight tools (human-friendly display names in the client).
 - **Surfaced worker-setup failures**: Revise-load and project-activation failures are recorded in the session and shown in `info` and the next eval result, instead of only being logged to stderr.
 - **Transport-cleanliness regression test** (E2E) asserting worker output never reaches the JSON-RPC stream, plus an E2E job in CI (`AGENTREPL_E2E=true` on Julia 1.12).
 
 ### Fixed
-- Server now declares only the capabilities it implements (Tools + Resources), instead of the framework default that advertised resource subscriptions and prompts it does not serve.
+- **Clean error stacktraces**: eval errors no longer show AgentREPL's harness frames or the `LoadError` wrapper. The message is the real exception and the stacktrace stops at user code.
+- **Revise hot-reload for activated projects**: Revise is loaded after `Pkg.activate`, so hot-reloading tracks the session's activated environment instead of AgentREPL's own.
+- Server declares only the capabilities it implements (Tools + Resources + Prompts), instead of the framework default that advertised resource subscriptions it does not serve.
 - `info` no longer lists internal temporaries as user variables (the introspection expression is scoped and a baseline of `Main` symbols is excluded).
 
 ## [0.6.0] - 2026-03-23
@@ -73,6 +79,7 @@ First public release of AgentREPL.jl.
 ### Note
 Tmux bidirectional REPL mode is deprecated. Use distributed mode with log_viewer instead. (Removed in 0.6.0)
 
-[Unreleased]: https://github.com/samtalki/AgentREPL.jl/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/samtalki/AgentREPL.jl/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/samtalki/AgentREPL.jl/compare/v0.6.2...v0.7.0
 [0.6.0]: https://github.com/samtalki/AgentREPL.jl/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/samtalki/AgentREPL.jl/releases/tag/v0.5.0
