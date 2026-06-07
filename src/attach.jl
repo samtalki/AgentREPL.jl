@@ -29,8 +29,8 @@ Note: The interactive REPL and MCP eval share the same worker process. Concurren
 evaluation from both paths may produce interleaved stdout/stderr output.
 """
 function _start_repl_socket_server!(session::SessionState)
+    worker_live(session) || error("Session '$(session.name)' has no running worker. Call eval first to spawn one.")
     worker = session.worker
-    (worker === nothing || !Malt.isrunning(worker)) && error("Session '$(session.name)' has no running worker. Call eval first to spawn one.")
 
     sock_path = _socket_path(session.name)
 

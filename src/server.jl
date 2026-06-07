@@ -11,12 +11,17 @@ Start the AgentREPL MCP server using STDIO transport.
 # Tools Provided
 - `eval`: Evaluate Julia code with persistent state
 - `reset`: Hard reset (kills worker, spawns fresh one, enables type redefinition)
-- `info`: Get session information (version, project, variables, Revise status, worker ID, session name)
+- `info`: Get session information (version, project, variables, Revise status, worker pid, session name)
 - `pkg`: Manage packages (add, rm, status, update, instantiate, resolve, test, develop, free)
 - `activate`: Switch active project/environment
 - `log_viewer`: Control the log viewer for visual output
 - `session`: Manage multiple named sessions (create, switch, list, destroy)
 - `revise`: Hot-reload code changes via Revise.jl (revise, track, includet, status)
+
+# Resources Provided
+Read-only views of session state (no side effects, never spawn a worker):
+`agentrepl://sessions`, `agentrepl://session/variables`, `agentrepl://session/info`,
+`agentrepl://session/project`, `agentrepl://session/log`.
 
 # Example
 ```julia

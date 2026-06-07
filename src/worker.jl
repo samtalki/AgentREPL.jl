@@ -18,6 +18,16 @@ worker_pid(session::SessionState) =
     session.worker === nothing ? nothing : Int(Base.getpid(session.worker.proc))
 
 """
+    worker_live(session::SessionState) -> Bool
+
+Whether the session has a worker that is still running. A non-`nothing` `worker`
+may still point at a dead process, so liveness is this two-part check — kept in one
+place rather than re-spelled at every call site.
+"""
+worker_live(session::SessionState) =
+    session.worker !== nothing && Malt.isrunning(session.worker)
+
+"""
     _one_line(e) -> String
 
 First line of an exception's message, for compact session notes.
@@ -25,16 +35,33 @@ First line of an exception's message, for compact session notes.
 _one_line(e) = first(split(sprint(showerror, e), '\n'; limit=2))
 
 """
+    _unwrap(e) -> Exception
+
+Unwrap a `TaskFailedException` (thrown by `fetch` on a failed task) to the
+underlying cause, so worker exceptions are classified by their real type
+(`Malt.TerminatedWorkerException`, `Malt.RemoteException`) rather than the wrapper.
+"""
+_unwrap(e) = e isa TaskFailedException ? e.task.exception : e
+
+"""
     _crash_message(e) -> String
 
-User-facing message for an exception raised while talking to the worker. A
-terminated worker (crash or `exit()`) gets a clear note instead of the raw
-`Malt.TerminatedWorkerException()`.
+User-facing message for an exception raised while talking to the worker.
+Distinguishes the cases so the agent knows whether to fix its code or not:
+- terminated worker (crash or `exit()`) → a clear note, not the raw exception;
+- a remote error from the harness itself (e.g. the result could not be transported)
+  → flagged as a harness issue so it isn't mistaken for a user code error;
+- anything else → the plain rendered error.
 """
-_crash_message(e) =
-    e isa Malt.TerminatedWorkerException ?
-        "Worker process terminated (it crashed or called exit()). A fresh worker will spawn on the next eval." :
-        sprint(showerror, e)
+function _crash_message(e)
+    if e isa Malt.TerminatedWorkerException
+        return "Worker process terminated (it crashed or called exit()). A fresh worker will spawn on the next eval."
+    elseif e isa Malt.RemoteException
+        return "AgentREPL could not run or transport this evaluation (a worker-side harness error, not your code):\n" * sprint(showerror, e)
+    else
+        return sprint(showerror, e)
+    end
+end
 
 """
     _clear_worker_state!(session::SessionState)
@@ -66,9 +93,7 @@ Reset session worker state if `e` indicates a dead worker. Handles
 `Malt.TerminatedWorkerException` and the case where the worker stopped running.
 """
 function _handle_worker_crash!(session::SessionState, e)
-    if e isa Malt.TerminatedWorkerException
-        _clear_worker_state!(session)
-    elseif session.worker !== nothing && !Malt.isrunning(session.worker)
+    if e isa Malt.TerminatedWorkerException || (session.worker !== nothing && !worker_live(session))
         _clear_worker_state!(session)
     end
 end
@@ -91,7 +116,7 @@ function _start_output_drain!(session_name::String, w::Malt.Worker)
         @async begin
             try
                 while Malt.isrunning(w)
-                    eof(pipe) && break          # blocks until a byte or EOF; no busy-spin
+                    eof(pipe) && break          # blocks until a byte or EOF; clean close exits
                     line = readline(pipe)
                     isempty(line) && continue
                     try
@@ -99,8 +124,16 @@ function _start_output_drain!(session_name::String, w::Malt.Worker)
                     catch
                     end
                 end
-            catch
-                # pipe closed / worker gone — drain task exits quietly
+            catch e
+                # A clean EOF leaves the loop above; reaching here means an unexpected
+                # read error while the worker is still up. Leave a breadcrumb — a
+                # silently dead drain is what lets the pipe fill and wedge the worker.
+                if Malt.isrunning(w)
+                    try
+                        println(stderr, "[worker:$session_name:$label] drain stopped on error: ", sprint(showerror, e))
+                    catch
+                    end
+                end
             end
         end
     end
@@ -113,11 +146,16 @@ end
 Ensure a worker process exists for the given session, creating one if needed.
 Returns the worker. Also attempts to load Revise.jl on the worker.
 
+The returned worker was alive at return time. A remote-eval failure during the
+post-spawn setup (project activation, workspace cd) is recorded as a note and can
+leave the worker freshly dead, so callers should treat a `TerminatedWorkerException`
+on first use as possible and route it through `_handle_worker_crash!`.
+
 The `_retry_without_revise` flag is internal — it prevents unbounded recursion
 when Revise.jl consistently crashes the worker process.
 """
 function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false)
-    if session.worker === nothing || !Malt.isrunning(session.worker)
+    if !worker_live(session)
         empty!(session.worker_notes)
         project_dir = try
             dirname(Pkg.project().path)
@@ -163,9 +201,12 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
             end
 
             # If loading Revise crashed the worker, respawn once without Revise.
-            if session.worker !== nothing && !Malt.isrunning(session.worker)
+            if !worker_live(session)
                 _clear_worker_state!(session)
-                return ensure_worker!(session; _retry_without_revise=true)
+                w2 = ensure_worker!(session; _retry_without_revise=true)
+                push!(session.worker_notes,
+                    "Loading Revise.jl crashed the worker; respawned without it. Hot-reload is disabled.")
+                return w2
             end
         end
 
@@ -205,7 +246,10 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
         try
             _remote_eval_fetch(w, :(const _AGENTREPL_BASELINE_NAMES = Set(names(Main; all=true))))
         catch e
-            @debug "Failed to snapshot baseline names on worker" session=session.name exception=e
+            # Without the baseline, get_worker_info would list Malt/Pkg internals as
+            # "user variables". Surface the degraded state instead of hiding it.
+            @warn "Could not snapshot Main baseline on worker; variable listing may include internals" session=session.name exception=(e, catch_backtrace())
+            push!(session.worker_notes, "Variable listing may include internal symbols (baseline snapshot failed).")
         end
 
         session.last_used = time()
@@ -220,7 +264,7 @@ Stop the worker process for the given session. `Malt.stop` escalates
 exit → SIGTERM → SIGKILL on its own.
 """
 function kill_worker!(session::SessionState)
-    if session.worker !== nothing && Malt.isrunning(session.worker)
+    if worker_live(session)
         try
             Malt.stop(session.worker)
         catch e
@@ -330,7 +374,9 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
                 try
                     string(_eval_value)
                 catch str_err
-                    "<$(typeof(_eval_value))>"
+                    # Both show and string threw — surface that display failed (often a
+                    # bug in the value's own show method) instead of an opaque placeholder.
+                    "<$(typeof(_eval_value)): display threw $(typeof(str_err))>"
                 end
             end
 
@@ -368,14 +414,27 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
                     isopen(result_channel) && put!(result_channel, (:ok, result))
                 catch e
                     try
-                        isopen(result_channel) && put!(result_channel, (:error, e))
-                    catch
+                        isopen(result_channel) && put!(result_channel, (:error, _unwrap(e)))
+                    catch put_err
+                        @debug "timeout-race: result task could not deliver (channel closed)" exception=put_err
                     end
                 end
             end
 
             tag, payload = take!(result_channel)
             close(timer)
+            # Resolve the boundary race: if the eval actually finished right as the
+            # timer fired, prefer the real outcome over reporting a timeout (a crash
+            # at the deadline must not be mislabeled "your code ran too long").
+            if tag == :timeout && istaskdone(future)
+                try
+                    payload = fetch(future)
+                    tag = :ok
+                catch e
+                    payload = _unwrap(e)
+                    tag = :error
+                end
+            end
             close(result_channel)
 
             if tag == :ok

@@ -34,7 +34,7 @@ AgentREPL uses a **multi-session worker subprocess architecture** (via [Malt.jl]
 - `activate` switches a session's active project/environment
 - Revise.jl is auto-loaded on workers for hot-reloading support
 
-**Why Malt, not Distributed.jl**: Malt spawns workers with `monitor_stdout=false`/`monitor_stderr=false`, so worker output goes to private pipes (drained to the server's stderr by `_start_output_drain!`) and can never reach the main process's stdout — which is the MCP JSON-RPC transport. Malt also has no global cluster state (each `Worker` is an independent object) and provides graceful `stop` (exit → SIGTERM → SIGKILL), `isrunning`, `interrupt`, and `TerminatedWorkerException`, replacing hand-rolled Distributed lifecycle code. IPC is `Malt.remote_eval_fetch(Main, w, expr)` via the `_remote_eval_fetch` helper.
+**Why Malt, not Distributed.jl**: Malt spawns workers with `monitor_stdout=false`/`monitor_stderr=false`, so worker output goes to private pipes (drained to the server's stderr by `_start_output_drain!`) and can never reach the main process's stdout — which is the MCP JSON-RPC transport. Malt also has no global cluster state (each `Worker` is an independent object) and provides graceful `stop` (exit → SIGTERM → SIGKILL), `isrunning`, and `TerminatedWorkerException`, replacing hand-rolled Distributed lifecycle code. IPC is `Malt.remote_eval_fetch(Main, w, expr)` via the `_remote_eval_fetch` helper.
 
 ### File Structure
 
@@ -126,16 +126,17 @@ All tools except `log_viewer` and `session` accept an optional `session` paramet
 
 ## Testing
 
-Tests are in `test/runtests.jl`, `test/test_eval.jl`, `test/test_sessions.jl`, `test/test_revise.jl`, and `test/test_highlighting.jl` covering:
+`test/runtests.jl` runs an Aqua.jl quality pass then the unit suites: `test_highlighting.jl`, `test_eval.jl`, `test_sessions.jl`, `test_competitive_features.jl`, `test_revise.jl`, and `test_resources.jl`. `test/test_mcp_protocol.jl` is gated behind `AGENTREPL_E2E=true` (it spawns a real server subprocess). Coverage:
 - Code evaluation (arithmetic, variables, functions, multi-line)
 - Output capture and error handling
 - Result formatting and truncation
-- Worker subprocess lifecycle (spawn, reset, persistence)
-- Multi-session management (create, switch, isolate, destroy)
-- Session-targeted evaluation
-- Pkg actions (test, develop, free)
-- Revise.jl integration (status, availability)
+- Worker subprocess lifecycle (spawn, reset, timeout kill, crash recovery, persistence)
+- `worker_notes` surfacing (Revise/activation failures shown in info/eval then cleared)
+- Multi-session management (create, switch, isolate, destroy), session-targeted eval
+- Pkg actions (test, develop, free); Revise.jl integration (status, availability)
+- MCP resources (the five providers, error path, audit-log branches)
 - Syntax highlighting (ANSI, markdown, plain formats)
+- E2E MCP protocol over the server subprocess, incl. transport-stream cleanliness
 
 ## Entry Point
 

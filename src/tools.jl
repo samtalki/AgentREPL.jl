@@ -228,6 +228,7 @@ Session reset complete.
                 for note in session.worker_notes
                     msg *= "- ⚠ $note\n"
                 end
+                empty!(session.worker_notes)  # consume, like eval — don't repeat on next call
 
                 TextContent(text = msg)
             catch e
@@ -646,7 +647,7 @@ Examples:
                     lines = String["Sessions:"]
                     for s in sessions
                         marker = s.is_current ? " *" : "  "
-                        worker = s.worker_id === nothing ? "not spawned" : "pid $(s.worker_id)"
+                        worker = s.worker_pid === nothing ? "not spawned" : "pid $(s.worker_pid)"
                         project = s.project === nothing ? "default env" : s.project
                         revise = s.revise ? "Revise" : "no Revise"
                         age_min = round(s.age_seconds / 60; digits=1)

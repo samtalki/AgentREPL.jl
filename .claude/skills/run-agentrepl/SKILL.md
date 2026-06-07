@@ -28,7 +28,7 @@ Optional — enable Revise.jl hot-reload. Revise is only a test-extra of this pa
 julia -e 'using Pkg; Pkg.activate(); Pkg.add("Revise")'
 ```
 
-Without this, `info` reports `Revise.jl: not available` and the server logs one "Worker may have crashed while loading Revise.jl" warning per worker spawn. Eval is unaffected.
+Without this, `info` reports `Revise.jl: not available` and the server logs a `Could not load Revise.jl on worker` warning (and records a session note) per worker spawn. Eval is unaffected.
 
 ## Run (agent path)
 
@@ -93,8 +93,8 @@ Prints the 8 tool names. `JULIA_REPL_PROJECT=/path` activates a project on the w
 ## Test
 
 ```bash
-julia --project=. -e "using Pkg; Pkg.test()"           # Aqua + unit suites, 268 tests, ~45s
-AGENTREPL_E2E=true julia --project=. -e "using Pkg; Pkg.test()"   # + real server subprocess + transport test, 303 tests
+julia --project=. -e "using Pkg; Pkg.test()"           # Aqua + unit suites (~45s)
+AGENTREPL_E2E=true julia --project=. -e "using Pkg; Pkg.test()"   # + real server subprocess + transport test
 ```
 
 During tests you'll see `[worker:<session>:stderr] ...` lines — that is the worker's drained stderr (e.g. project-activation chatter, Revise warnings), routed to the test process's stderr on purpose. The suite still ends with `Testing AgentREPL tests passed`.
@@ -103,13 +103,13 @@ During tests you'll see `[worker:<session>:stderr] ...` lines — that is the wo
 
 - **Framing is newline-delimited JSON, not LSP `Content-Length`.** One JSON object per line. A client written for the LSP framing will hang. The driver and the raw-launch snippet above both assume NDJSON.
 - **The stdout transport is clean JSON; diagnostics go to stderr.** Malt workers keep their stdout/stderr on private pipes (drained to the server's stderr), and the framework's own logs go to stderr too — so the stdout transport carries only JSON-RPC. The driver still skips non-`{` lines defensively, and the bare-launch snippet pipes stderr to `/dev/null`.
-- **First eval is slow; the worker spawns lazily.** No worker exists until the first `eval`/`info`/`pkg` call — that call spawns a Malt worker (and loads UnicodePlots/Revise on it). Cold, budget tens of seconds; the driver's per-request timeout is 120s for this reason. Later evals are milliseconds.
-- **`reset` kills the worker and drops all state.** It returns fast but the *next* eval pays the worker-spawn cost again. Variables, loaded packages, and `using` imports are gone — that is the point (it enables struct/type redefinition).
+- **First eval is slow; the worker spawns lazily.** No worker exists until the first `eval`/`pkg` call (or an `info`/`pkg` tool call) — that call spawns a Malt worker and attempts to load Revise on it. UnicodePlots loads only on the first `using UnicodePlots`. Cold, budget tens of seconds; the driver's per-request timeout is 120s for this reason. Later evals are milliseconds.
+- **`reset` kills the worker and drops all state.** It returns fast but the *next* eval pays the worker spawn cost again. Variables, loaded packages, and `using` imports are gone — that is the point (it enables struct/type redefinition).
 - **Revise "not available" is expected on a clean machine.** See Setup. It is graceful degradation, not a failure; eval works regardless.
 - **STDIO only, no port.** You cannot `curl` this server. The single local IPC channel is `session attach` (a chmod-600 Unix socket for an interactive human REPL), which needs `tmux` and is out of scope for headless driving.
 
 ## Troubleshooting
 
-- **`timeout (120000ms) waiting for tools/call`**: almost always the cold first-eval worker spawn colliding with a precompile. Run the Setup precompile first, then retry.
+- **`timeout (120000ms) waiting for tools/call`**: almost always the cold first eval's worker spawn colliding with a precompile. Run the Setup precompile first, then retry.
 - **Driver prints `server exited (code=1 ...)`**: the Julia process died on launch. Run `julia --project=. -e "using AgentREPL"` directly to see the real error (usually a missing `Manifest.toml` — run the Setup step).
-- **`Package Revise not found` warning floods stderr**: harmless. Silence it for that run by adding Revise to your global env (Setup), or ignore it.
+- **`Could not load Revise.jl on worker` warning on stderr**: harmless. Silence it by adding Revise to your global env (Setup), or ignore it.

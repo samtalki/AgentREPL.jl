@@ -6,7 +6,7 @@
 Check if Revise.jl is loaded on the session's worker.
 """
 function is_revise_available(session::SessionState)
-    return session.revise_loaded && session.worker !== nothing && Malt.isrunning(session.worker)
+    return session.revise_loaded && worker_live(session)
 end
 
 _revise_unavailable_msg(session::SessionState) =
@@ -35,7 +35,7 @@ function revise_on_worker!(session::SessionState)
         return result
     catch e
         _handle_worker_crash!(session, e)
-        return (success = false, message = "Error calling Revise.revise(): $(sprint(showerror, e))")
+        return (success = false, message = "Revise.revise() failed — $(_crash_message(e))")
     end
 end
 
@@ -74,7 +74,7 @@ function _revise_file_action(session::SessionState, filepath::String, action::Sy
         return result
     catch e
         _handle_worker_crash!(session, e)
-        return (success = false, message = "Error $verb file: $(sprint(showerror, e))")
+        return (success = false, message = "$verb file failed — $(_crash_message(e))")
     end
 end
 
@@ -129,6 +129,6 @@ function get_revise_status(session::SessionState)
     catch e
         _handle_worker_crash!(session, e)
         return (available = false, tracked_files = String[], watched_packages = String[],
-                note = "Failed to query Revise status: $(sprint(showerror, e))")
+                note = "Failed to query Revise status — $(_crash_message(e))")
     end
 end

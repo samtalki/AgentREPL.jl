@@ -3,22 +3,33 @@
 # Resources let Claude Code pull session state into context (e.g. @-mention) without
 # spending an eval/info tool call. Each data_provider is zero-arg and reads live
 # state; the framework JSON-encodes whatever it returns, so providers return
-# NamedTuples/Dicts (mime_type "application/json"). Providers never throw — failures
-# come back as an `error` field so a resource read degrades instead of erroring.
+# NamedTuples (mime_type "application/json").
+#
+# Contract:
+# - A resource READ has no side effects: providers never spawn a worker. When no
+#   live worker exists they report what is known without forcing one, so an
+#   @-mention cannot cold-start a Julia process.
+# - Providers never throw. `_resource_safe` wraps each: success is tagged
+#   `ok = true`, failure is `(ok = false, error = ...)`. The `ok` flag is a
+#   dedicated discriminant that cannot collide with a payload field.
+# - Any worker access goes through `get_worker_info` (which self-heals on crash),
+#   guarded by `worker_live`, never a raw `_remote_eval_fetch`.
 
 """
-    _resource_safe(f) -> Any
+    _resource_safe(f) -> NamedTuple
 
-Run a resource data_provider body, returning its value or an `(error = ...)`
-NamedTuple if it throws. Keeps `resources/read` from hard-failing.
+Run a resource data_provider body. On success returns its NamedTuple tagged with
+`ok = true`; on failure returns `(ok = false, error = ...)`. Keeps `resources/read`
+from hard-failing while giving the client an unambiguous success/failure flag.
+`InterruptException`/`OutOfMemoryError` propagate (never swallowed into `error`).
 """
 function _resource_safe(f)
     try
-        return f()
+        return merge((ok = true,), f())
     catch e
         e isa InterruptException && rethrow()
         e isa OutOfMemoryError && rethrow()
-        return (error = sprint(showerror, e),)
+        return (ok = false, error = sprint(showerror, e))
     end
 end
 
@@ -27,9 +38,9 @@ end
 _resource_sessions() = _resource_safe() do
     (sessions = [(
         name = s.name,
-        worker_pid = s.worker_id,
+        worker_pid = s.worker_pid,
         project = s.project,
-        revise = s.revise,
+        revise_loaded = s.revise,
         is_current = s.is_current,
         age_seconds = round(s.age_seconds; digits=1),
     ) for s in list_sessions()],
@@ -38,19 +49,29 @@ end
 
 _resource_variables() = _resource_safe() do
     session = get_current_session!()
-    info = get_worker_info(session)
-    (session = session.name,
-     variables = [(name = string(v.name), type = v.type, size = v.size) for v in info.variables])
+    live = worker_live(session)
+    vars = live ?
+        [(name = string(v.name), type = v.type, size = v.size) for v in get_worker_info(session).variables] :
+        NamedTuple{(:name, :type, :size), Tuple{String,String,String}}[]
+    (session = session.name, worker_spawned = live, variables = vars)
 end
 
 _resource_info() = _resource_safe() do
     session = get_current_session!()
-    info = get_worker_info(session)
+    live = worker_live(session)
+    modules = 0
+    project = something(session.project_path, "(default)")
+    if live
+        wi = get_worker_info(session)  # worker already live → no spawn
+        modules = wi.modules
+        project = wi.project
+    end
     (session = session.name,
      is_current = session.name == SESSIONS.current,
-     julia_version = info.version,
-     project = info.project,
-     loaded_modules = info.modules,
+     worker_spawned = live,
+     julia_version = string(VERSION),  # worker shares this Julia binary
+     project = project,
+     loaded_modules = modules,
      revise_loaded = session.revise_loaded,
      worker_pid = worker_pid(session),
      eval_count = length(session.eval_timings),
@@ -60,9 +81,8 @@ end
 _resource_project() = _resource_safe() do
     session = get_current_session!()
     dir = session.project_path
-    if dir === nothing
-        info = get_worker_info(session)
-        dir = info.project
+    if dir === nothing && worker_live(session)
+        dir = get_worker_info(session).project
     end
     project_toml = ""
     manifest_present = false
@@ -105,11 +125,11 @@ function agentrepl_resources()
             mime_type = "application/json", data_provider = _resource_sessions),
         MCPResource(; uri = "agentrepl://session/variables",
             name = "Current session variables",
-            description = "User-defined variables in the current session (name, type, size). Spawns the worker if needed.",
+            description = "User-defined variables in the current session (name, type, size). Empty until a worker is spawned; reading does not spawn one.",
             mime_type = "application/json", data_provider = _resource_variables),
         MCPResource(; uri = "agentrepl://session/info",
             name = "Current session info",
-            description = "Julia version, active project, loaded module count, Revise status, worker pid, and setup notes for the current session.",
+            description = "Julia version, active project, loaded module count, Revise status, worker pid, and setup notes for the current session. Reading does not spawn a worker.",
             mime_type = "application/json", data_provider = _resource_info),
         MCPResource(; uri = "agentrepl://session/project",
             name = "Current session project",

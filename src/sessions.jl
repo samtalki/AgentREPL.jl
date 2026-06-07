@@ -89,12 +89,12 @@ end
 List all sessions with summary information.
 """
 function list_sessions()
-    results = NamedTuple{(:name, :worker_id, :project, :revise, :is_current, :age_seconds), Tuple{String, Union{Int,Nothing}, Union{String,Nothing}, Bool, Bool, Float64}}[]
+    results = NamedTuple{(:name, :worker_pid, :project, :revise, :is_current, :age_seconds), Tuple{String, Union{Int,Nothing}, Union{String,Nothing}, Bool, Bool, Float64}}[]
 
     for (name, session) in SESSIONS.sessions
         push!(results, (
             name = name,
-            worker_id = worker_pid(session),
+            worker_pid = worker_pid(session),
             project = session.project_path,
             revise = session.revise_loaded,
             is_current = (name == SESSIONS.current),
@@ -140,7 +140,7 @@ function _cleanup_all_workers!()
     # Stop all workers concurrently so total wait stays bounded regardless of
     # session count (Malt.stop escalates exit → SIGTERM → SIGKILL per worker).
     @sync for (_, s) in SESSIONS.sessions
-        if s.worker !== nothing && Malt.isrunning(s.worker)
+        if worker_live(s)
             w = s.worker
             @async try
                 Malt.stop(w; exit_timeout=2.0, term_timeout=2.0)

@@ -182,27 +182,33 @@ async function smoke() {
 
 async function oneEval(code) {
   const c = new MCPClient();
+  let failed = false;
   try {
     await c.initialize();
-    const text = await c.callTool("eval", { code });
-    console.log(text);
+    console.log(await c.callTool("eval", { code }));
+  } catch (e) {
+    failed = true;
+    console.error("error:", e.message);
   } finally {
     c.close();
   }
-  process.exit(0);
+  process.exit(failed ? 1 : 0);
 }
 
 async function oneCall(tool, jsonArgs) {
   const c = new MCPClient();
+  let failed = false;
   try {
     await c.initialize();
     const args = jsonArgs ? JSON.parse(jsonArgs) : {};
-    const text = await c.callTool(tool, args);
-    console.log(text);
+    console.log(await c.callTool(tool, args));
+  } catch (e) {
+    failed = true;
+    console.error("error:", e.message);
   } finally {
     c.close();
   }
-  process.exit(0);
+  process.exit(failed ? 1 : 0);
 }
 
 async function repl() {

@@ -18,29 +18,42 @@ const JULIA_EXE = Base.julia_cmd().exec[1]
 
 mutable struct MCPClient
     proc::Base.Process
-    input::IO              # write to server stdin
-    output::IO             # read from server stdout
+    input::IO                 # write to server stdin
+    output::IO                # read from server stdout
     next_id::Int
-    lines::Channel{String} # every stdout line, fed by one background reader
+    lines::Channel{String}    # every stdout line, fed by one background reader
+    errlines::Channel{String} # every stderr line (server logs + drained worker output)
+end
+
+# One reader per stream owns it. Consumers poll the channels; nothing else calls
+# readline, so no dangling reader can steal another consumer's line.
+function _spawn_reader(io, ch)
+    @async begin
+        try
+            for line in eachline(io)
+                put!(ch, line)
+            end
+        catch
+        finally
+            try; close(ch); catch; end
+        end
+    end
 end
 
 function start_server()
     cmd = `$JULIA_EXE --project=$PROJECT_DIR $SERVER_SCRIPT`
-    proc = open(cmd, "r+")
+    # Explicit pipes (not `open(cmd, "r+")`) so we can capture stderr separately and
+    # verify worker output is routed there rather than onto the stdout transport.
+    inp = Pipe(); outp = Pipe(); errp = Pipe()
+    proc = run(pipeline(cmd; stdin=inp, stdout=outp, stderr=errp); wait=false)
+    close(inp.out); close(outp.in); close(errp.in)
     lines = Channel{String}(10_000)
-    client = MCPClient(proc, proc, proc, 1, lines)
-    # A SINGLE reader owns the stream. Consumers poll the channel; nothing else
-    # calls readline, so no dangling reader can steal another consumer's line.
-    @async begin
-        try
-            for line in eachline(proc)
-                put!(lines, line)
-            end
-        catch
-        finally
-            try; close(lines); catch; end
-        end
-    end
+    # Large cap: the server's stderr accumulates across the whole session; it must not
+    # fill and block the reader before a later test drains it.
+    errlines = Channel{String}(200_000)
+    client = MCPClient(proc, inp, outp, 1, lines, errlines)
+    _spawn_reader(outp, lines)
+    _spawn_reader(errp, errlines)
     return client
 end
 
@@ -119,11 +132,21 @@ end
 # Collect everything the server emits on stdout over `idle` seconds. Used to assert
 # the JSON-RPC transport never carries stray (non-JSON) output.
 function drain_stdout_lines(client::MCPClient; idle::Float64=3.0)
+    return _drain(client.lines; idle=idle)
+end
+
+# Collect the server's stderr (its own logs plus worker output drained to stderr)
+# over `idle` seconds. Used to prove worker out-of-band output lands on stderr.
+function drain_stderr_lines(client::MCPClient; idle::Float64=3.0)
+    return _drain(client.errlines; idle=idle)
+end
+
+function _drain(ch::Channel{String}; idle::Float64=3.0)
     lines = String[]
     deadline = time() + idle
     while time() < deadline
-        if isready(client.lines)
-            line = take!(client.lines)
+        if isready(ch)
+            line = take!(ch)
             isempty(line) || push!(lines, line)
         else
             sleep(0.05)
@@ -314,6 +337,13 @@ end
                 @test JSON3.read(line, Dict{String,Any}) isa Dict  # every line is valid JSON-RPC
             end
             @test !any(l -> occursin("LEAK", l), extra)         # marker never hit the transport
+
+            # The marker MUST instead surface on the server's stderr. This proves the
+            # drain actually ran and routed worker output away from the transport —
+            # not merely that Malt's monitor flags are off. Without this assertion the
+            # stdout check could pass even if draining were broken.
+            errs = drain_stderr_lines(client; idle=3.0)
+            @test any(l -> occursin("{LEAK", l), errs)
 
             # transport still intact afterwards
             resp2 = call_tool!(client, "eval", Dict("code" => "2+2"); timeout=30.0)

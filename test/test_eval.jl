@@ -305,6 +305,57 @@ end
         session = AgentREPL.get_current_session!()
         @test session.worker !== nothing
     end
+
+    @testset "Crash during a timed eval (timeout :error branch)" begin
+        # A worker that dies WITH a timeout set must be reported as a crash, not a
+        # timeout. This exercises the :error branch of the timeout race, distinct
+        # from the no-timeout path and the :timeout path.
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        @test session.worker !== nothing
+        _, _, error_str, _ = AgentREPL.capture_eval_on_worker("exit()"; timeout=30.0)
+        @test error_str !== nothing
+        @test contains(error_str, "terminated") || contains(error_str, "crashed")
+        @test !contains(error_str, "TimeoutError")
+        @test session.worker === nothing
+    end
+end
+
+@testset "Worker Notes" begin
+    @testset "eval surfaces a note once, then consumes it" begin
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        push!(session.worker_notes, "synthetic-note-xyz")
+        tool = AgentREPL.create_eval_tool()
+        r = tool.handler(Dict("code" => "1+1"))
+        text = r isa AgentREPL.TextContent ? r.text : r.content[1]["text"]
+        @test occursin("synthetic-note-xyz", text)   # surfaced in the eval result
+        @test isempty(session.worker_notes)           # then cleared
+
+        # A subsequent eval no longer repeats it.
+        r2 = tool.handler(Dict("code" => "2+2"))
+        text2 = r2 isa AgentREPL.TextContent ? r2.text : r2.content[1]["text"]
+        @test !occursin("synthetic-note-xyz", text2)
+    end
+
+    @testset "info peeks a note without consuming it" begin
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        push!(session.worker_notes, "peek-note-abc")
+        r = AgentREPL.create_info_tool().handler(Dict())
+        text = r isa AgentREPL.TextContent ? r.text : r.content[1]["text"]
+        @test occursin("peek-note-abc", text)
+        @test !isempty(session.worker_notes)          # info does not consume
+        empty!(session.worker_notes)
+    end
+
+    @testset "notes do not leak across a respawn" begin
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        push!(session.worker_notes, "stale-note-should-vanish")
+        AgentREPL.reset_worker!(session)              # clears notes on (re)spawn
+        @test !any(n -> occursin("stale-note-should-vanish", n), session.worker_notes)
+    end
 end
 
 @testset "Project Activation" begin

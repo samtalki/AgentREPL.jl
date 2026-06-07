@@ -16,7 +16,7 @@ project environment, and Revise.jl tracking state.
 - `created_at::Float64`: Session creation time (from `time()`)
 - `last_used::Float64`: Last time this session was used (from `time()`)
 - `eval_timings::Vector{Float64}`: Ring buffer of recent eval durations (capped at `MAX_EVAL_TIMINGS`)
-- `worker_notes::Vector{String}`: Non-fatal setup warnings from the current worker spawn (e.g. Revise failed to load, project activation failed) — surfaced in `info` and on the next eval, then cleared
+- `worker_notes::Vector{String}`: Non-fatal setup warnings from the current worker spawn (e.g. Revise failed to load, project activation failed). Consumed (cleared) when surfaced by `eval` or `reset`; `info` peeks without clearing. Reset to empty on every (re)spawn, so notes never leak across worker generations
 """
 mutable struct SessionState
     const name::String

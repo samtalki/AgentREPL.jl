@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Worker backend switched from Distributed.jl to [Malt.jl](https://github.com/JuliaPluto/Malt.jl).** Each session is now a `Malt.Worker`. Malt keeps worker stdout/stderr on private pipes, so worker output can no longer reach the stdout MCP JSON-RPC transport; the pipes are drained to the server's stderr. Removes Distributed's global cluster state and replaces hand-rolled lifecycle/crash handling with Malt's `stop`/`isrunning`/`interrupt`/`TerminatedWorkerException`. `info` and `session` now report the worker OS pid instead of a cluster id.
+- **Worker backend switched from Distributed.jl to [Malt.jl](https://github.com/JuliaPluto/Malt.jl).** Each session is now a `Malt.Worker`. Malt keeps worker stdout/stderr on private pipes, so worker output can no longer reach the stdout MCP JSON-RPC transport; the pipes are drained to the server's stderr. Removes Distributed's global cluster state and replaces hand-rolled lifecycle/crash handling with Malt's `stop`/`isrunning`/`TerminatedWorkerException`. `info` and `session` now report the worker OS pid instead of a cluster id.
 
 ### Added
 - **MCP resources** exposing live session state for clients to read/@-mention without an extra tool call: `agentrepl://sessions`, `agentrepl://session/variables`, `agentrepl://session/info`, `agentrepl://session/project`, `agentrepl://session/log`.
