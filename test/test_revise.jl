@@ -129,9 +129,24 @@
             @test e1 === nothing && occursin("v1", v1)
 
             write(src, "hotgreet() = \"v2\"\n")         # edit the tracked file
-            rev = AgentREPL.revise_on_worker!(session)
+            # Revise observes the change through its async file watcher
+            # (kqueue/FSEvents on macOS), so a single revise() right after the
+            # write can race the watcher. Poll until the new definition lands.
+            local rev = (success = false,)
+            local v2 = ""
+            local e2 = nothing
+            revised = false
+            for _ in 1:50
+                sleep(0.1)
+                rev = AgentREPL.revise_on_worker!(session)
+                v2, _, e2, _ = AgentREPL.capture_eval_on_worker("hotgreet()")
+                if rev.success && e2 === nothing && occursin("v2", v2)
+                    revised = true
+                    break
+                end
+            end
             @test rev.success
-            v2, _, e2, _ = AgentREPL.capture_eval_on_worker("hotgreet()")
+            @test revised
             @test e2 === nothing && occursin("v2", v2)
         end
     end
