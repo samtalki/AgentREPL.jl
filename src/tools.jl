@@ -40,6 +40,7 @@ Create the eval tool for evaluating Julia code.
 function create_eval_tool()
     MCPTool(
         name = "eval",
+        title = "Evaluate Julia code",
         description = """
 Evaluate Julia code in a persistent Julia REPL session.
 
@@ -143,11 +144,17 @@ Use `revise(action="revise")` after editing .jl files to hot-reload changes with
 
                 try
                     value_str, output, error_str, elapsed = capture_eval_on_worker(code; timeout=timeout, session_name=session_name, isolated=isolated)
-                    resolved_name = resolve_session(session_name).name
-                    log_interaction(code, value_str, output, error_str; elapsed=elapsed, session_name=resolved_name)
+                    sess = resolve_session(session_name)
+                    log_interaction(code, value_str, output, error_str; elapsed=elapsed, session_name=sess.name)
 
                     result = format_result(code, value_str, output, error_str;
                                             elapsed=elapsed, max_output=max_output, max_stackframes=max_stackframes)
+                    # Surface non-fatal worker-setup warnings (e.g. project activation
+                    # failed, Revise missing) once, then clear so they don't repeat.
+                    if ephemeral_name === nothing && !isempty(sess.worker_notes)
+                        result *= "\n\n⚠ Session notes:\n" * join(("  • " * n for n in sess.worker_notes), "\n")
+                        empty!(sess.worker_notes)
+                    end
                     TextContent(text = result)
                 finally
                     if ephemeral_name !== nothing
@@ -176,6 +183,7 @@ Create the reset tool for resetting the Julia session.
 function create_reset_tool()
     MCPTool(
         name = "reset",
+        title = "Reset Julia session",
         description = """
 Hard reset: Kill the Julia worker process and spawn a fresh one.
 
@@ -202,13 +210,14 @@ Prefer `revise(action="revise")` for function/method changes — it preserves se
                 session_name = get(params, "session", nothing)
                 session = resolve_session(session_name)
 
-                old_id = session.worker_id
-                new_id = reset_worker!(session)
+                old_id = worker_pid(session)
+                reset_worker!(session)
+                new_id = worker_pid(session)
 
                 msg = """
 Session reset complete.
-- Old worker (ID: $old_id) terminated
-- New worker (ID: $new_id) spawned
+- Old worker (pid: $(something(old_id, "none"))) terminated
+- New worker (pid: $(something(new_id, "?"))) spawned
 - All variables, functions, and types cleared
 - Packages will need to be reloaded with `using`
 - Revise.jl: $(session.revise_loaded ? "loaded" : "not available")
@@ -216,6 +225,10 @@ Session reset complete.
                 if session.project_path !== nothing
                     msg *= "- Project re-activated: $(session.project_path)\n"
                 end
+                for note in session.worker_notes
+                    msg *= "- ⚠ $note\n"
+                end
+                empty!(session.worker_notes)  # consume, like eval — don't repeat on next call
 
                 TextContent(text = msg)
             catch e
@@ -235,6 +248,7 @@ Create the info tool for getting session information.
 function create_info_tool()
     MCPTool(
         name = "info",
+        title = "Julia session info",
         description = """
 Get information about the current Julia session.
 
@@ -286,6 +300,9 @@ Returns:
                     "Eval Timings ($n evals): $spark  median $(format_elapsed(med)), max $(format_elapsed(mx))\n"
                 end
 
+                notes_str = isempty(session.worker_notes) ? "" :
+                    "Notes:\n" * join(("  ⚠ " * n for n in session.worker_notes), "\n") * "\n"
+
                 msg = """
 Session: $(session.name)$(session.name == SESSIONS.current ? " (current)" : "")
 Julia Version: $(info.version)
@@ -294,8 +311,8 @@ Revise.jl: $(session.revise_loaded ? "loaded" : "not available")
 User Variables:
 $vars_str
 Loaded Modules: $(info.modules)
-Worker ID: $(session.worker_id)
-$(timings_str)"""
+Worker pid: $(something(worker_pid(session), "not yet spawned"))
+$(notes_str)$(timings_str)"""
                 TextContent(text = msg)
             catch e
                 e isa InterruptException && rethrow()
@@ -314,6 +331,7 @@ Create the pkg tool for package management.
 function create_pkg_tool()
     MCPTool(
         name = "pkg",
+        title = "Manage Julia packages",
         description = """
 Manage Julia packages in the current environment.
 
@@ -441,6 +459,7 @@ Create the activate tool for switching projects/environments.
 function create_activate_tool()
     MCPTool(
         name = "activate",
+        title = "Activate Julia project",
         description = """
 Activate a Julia project or environment.
 
@@ -502,6 +521,7 @@ Create the log_viewer tool for controlling the log viewer.
 function create_log_viewer_tool()
     MCPTool(
         name = "log_viewer",
+        title = "Julia log viewer",
         description = """
 Open a separate terminal window showing Julia REPL output in real-time.
 
@@ -561,6 +581,7 @@ Create the session tool for managing multiple Julia REPL sessions.
 function create_session_tool()
     MCPTool(
         name = "session",
+        title = "Manage Julia sessions",
         description = """
 Manage multiple Julia REPL sessions.
 
@@ -612,7 +633,7 @@ Examples:
                 elseif action_lower == "switch"
                     session = switch_session!(name)
                     msg = "Switched to session '$(session.name)'.\n"
-                    msg *= "Worker ID: $(something(session.worker_id, "not yet spawned"))\n"
+                    msg *= "Worker pid: $(something(worker_pid(session), "not yet spawned"))\n"
                     msg *= "Project: $(something(session.project_path, "default"))\n"
                     msg *= "Revise.jl: $(session.revise_loaded ? "loaded" : "not loaded")"
                     TextContent(text = msg)
@@ -626,7 +647,7 @@ Examples:
                     lines = String["Sessions:"]
                     for s in sessions
                         marker = s.is_current ? " *" : "  "
-                        worker = s.worker_id === nothing ? "not spawned" : "worker $(s.worker_id)"
+                        worker = s.worker_pid === nothing ? "not spawned" : "pid $(s.worker_pid)"
                         project = s.project === nothing ? "default env" : s.project
                         revise = s.revise ? "Revise" : "no Revise"
                         age_min = round(s.age_seconds / 60; digits=1)
@@ -690,6 +711,7 @@ Create the revise tool for hot-reloading Julia code changes.
 function create_revise_tool()
     MCPTool(
         name = "revise",
+        title = "Hot-reload (Revise.jl)",
         description = """
 Hot-reload Julia code changes using Revise.jl — no session restart needed.
 

@@ -1,6 +1,5 @@
 using Test
 using AgentREPL
-using Distributed
 using Aqua
 
 @testset "AgentREPL.jl" begin
@@ -14,6 +13,7 @@ using Aqua
     include("test_sessions.jl")
     include("test_competitive_features.jl")
     include("test_revise.jl")
+    include("test_resources.jl")
 
     # MCP protocol integration tests (spawn server subprocess, ~60s)
     # Run with: AGENTREPL_E2E=true julia --project=. -e "using Pkg; Pkg.test()"

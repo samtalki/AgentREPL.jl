@@ -6,7 +6,7 @@
 Check if Revise.jl is loaded on the session's worker.
 """
 function is_revise_available(session::SessionState)
-    return session.revise_loaded && session.worker_id !== nothing && session.worker_id in workers()
+    return session.revise_loaded && worker_live(session)
 end
 
 _revise_unavailable_msg(session::SessionState) =
@@ -24,7 +24,7 @@ function revise_on_worker!(session::SessionState)
     end
 
     try
-        result = remotecall_fetch(Core.eval, session.worker_id, Main, quote
+        result = _remote_eval_fetch(session.worker, quote
             try
                 Revise.revise()
                 (success = true, message = "Revise completed — all tracked file changes have been loaded.")
@@ -35,7 +35,7 @@ function revise_on_worker!(session::SessionState)
         return result
     catch e
         _handle_worker_crash!(session, e)
-        return (success = false, message = "Error calling Revise.revise(): $(sprint(showerror, e))")
+        return (success = false, message = "Revise.revise() failed — $(_crash_message(e))")
     end
 end
 
@@ -61,7 +61,7 @@ function _revise_file_action(session::SessionState, filepath::String, action::Sy
         "Included and tracking '$(filepath)'. Changes will be auto-loaded on revise()."
 
     try
-        result = remotecall_fetch(Core.eval, session.worker_id, Main, quote
+        result = _remote_eval_fetch(session.worker, quote
             let fp = $filepath
                 try
                     $action_expr
@@ -74,7 +74,7 @@ function _revise_file_action(session::SessionState, filepath::String, action::Sy
         return result
     catch e
         _handle_worker_crash!(session, e)
-        return (success = false, message = "Error $verb file: $(sprint(showerror, e))")
+        return (success = false, message = "$verb file failed — $(_crash_message(e))")
     end
 end
 
@@ -108,7 +108,7 @@ function get_revise_status(session::SessionState)
     end
 
     try
-        result = remotecall_fetch(Core.eval, session.worker_id, Main, quote
+        result = _remote_eval_fetch(session.worker, quote
             try
                 watched = String[]
                 # NOTE: Revise.watched_files and Revise.pkgdatas are internal APIs,
@@ -129,6 +129,6 @@ function get_revise_status(session::SessionState)
     catch e
         _handle_worker_crash!(session, e)
         return (available = false, tracked_files = String[], watched_packages = String[],
-                note = "Failed to query Revise status: $(sprint(showerror, e))")
+                note = "Failed to query Revise status — $(_crash_message(e))")
     end
 end

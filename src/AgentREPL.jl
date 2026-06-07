@@ -9,7 +9,7 @@ the REPL stays alive and you only pay the startup cost once.
 
 # Architecture
 
-AgentREPL uses a multi-session worker subprocess model via Distributed.jl:
+AgentREPL uses a multi-session worker subprocess model via Malt.jl:
 - The MCP server runs in the main process (STDIO transport)
 - Code evaluation happens in spawned worker processes (one per session)
 - Multiple named sessions can run concurrently with isolated state
@@ -49,7 +49,7 @@ claude mcp add julia-repl -- julia --project=/path/to/AgentREPL.jl /path/to/Agen
 module AgentREPL
 
 using ModelContextProtocol
-using Distributed
+import Malt
 using Pkg
 using Dates
 using JuliaSyntaxHighlighting
@@ -67,6 +67,7 @@ include("packages.jl")
 include("logging.jl")
 include("attach.jl")
 include("tools.jl")
+include("resources.jl")
 include("server.jl")
 
 function __init__()

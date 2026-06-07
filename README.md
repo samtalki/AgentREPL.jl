@@ -14,7 +14,7 @@ AgentREPL is the simplest way to give Claude Code a persistent Julia session. Th
 
 2. **Workflow-native Revise.jl.** Every worker auto-loads Revise.jl. The plugin's PostToolUse hook automatically calls `revise` after you edit `.jl` files. You never manually reload code.
 
-3. **True process isolation.** Each session is a separate Distributed.jl worker. You can redefine structs, kill crashed sessions, and run parallel workloads without cross-contamination. `reset` does what it says -- complete state erasure including type definitions.
+3. **True process isolation.** Each session is a separate Malt.jl worker process. You can redefine structs, kill crashed sessions, and run parallel workloads without cross-contamination. `reset` does what it says -- complete state erasure including type definitions.
 
 AgentREPL is not a Julia IDE replacement. It has 8 tools, not 35. It does not have debugging, semantic search, or a dashboard. If you need those, see the [comparison section](#choosing-a-julia-mcp-server) below. AgentREPL's approach is that `eval` plus Julia's existing introspection capabilities (which you can call directly via `eval`) covers most agent workflows with minimal complexity.
 
@@ -72,7 +72,7 @@ The first call may take a few seconds for JIT compilation; subsequent calls are 
 
 ## Architecture
 
-AgentREPL uses a **multi-session worker subprocess model** via Distributed.jl:
+AgentREPL uses a **multi-session worker subprocess model** via [Malt.jl](https://github.com/JuliaPluto/Malt.jl):
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -80,14 +80,18 @@ AgentREPL uses a **multi-session worker subprocess model** via Distributed.jl:
 │   ↕ STDIO (MCP)                                        │
 │ ┌─────────────────────────────────────────────────────┐ │
 │ │ AgentREPL MCP Server (Main Process)                 │ │
-│ │   ↕ Distributed.jl                                  │ │
+│ │   ↕ Malt.jl                                         │ │
 │ │ ┌──────────────────┐  ┌──────────────────┐          │ │
 │ │ │ Session "default" │  │ Session "testing" │  ...    │ │
-│ │ │ (Worker 2)        │  │ (Worker 3)        │         │ │
+│ │ │ (worker process)  │  │ (worker process)  │         │ │
 │ │ └──────────────────┘  └──────────────────┘          │ │
 │ └─────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
 ```
+
+Malt (the worker library behind Pluto.jl) keeps each worker's stdout/stderr on a
+private pipe instead of the host's streams, so worker output can never corrupt the
+MCP JSON-RPC transport that shares the main process's stdout.
 
 **Why a worker subprocess?**
 - `reset` can kill and respawn the worker for a **true hard reset**
@@ -335,6 +339,18 @@ Use `revise` after editing `.jl` files. Use `reset` only for struct layout chang
 
 All tools except `log_viewer` and `session` accept an optional `session` parameter to target a specific session.
 
+## Resources
+
+Alongside the tools, AgentREPL exposes the current session's state as MCP resources, which a client can pull into context (Claude Code surfaces them as @-mentions) without spending an `eval` or `info` call. Each returns JSON:
+
+| URI | Contents |
+|-----|----------|
+| `agentrepl://sessions` | All sessions with worker pid, project, Revise status, age |
+| `agentrepl://session/variables` | User-defined variables in the current session (name, type, size) |
+| `agentrepl://session/info` | Julia version, project, module count, Revise status, worker pid, setup notes |
+| `agentrepl://session/project` | The active `Project.toml` and whether a `Manifest.toml` is present |
+| `agentrepl://session/log` | Recent audit-log entries (when `JULIA_REPL_AUDIT_DIR` is set) |
+
 ## Configuration
 
 ### Environment/Project Management
@@ -366,8 +382,8 @@ The activated environment persists across `reset` calls.
 | Transport | STDIO | HTTP (+ZMQ) | HTTP |
 | Network port | None | 2828 | 3000 |
 | Auto-start from Claude Code | Yes | No | No |
-| Dependencies | 5 (3 stdlib) | 30+ | Few |
-| Session isolation | Process-level (Distributed.jl) | Via Gate | Shared REPL |
+| Dependencies | 6 (3 stdlib) | 30+ | Few |
+| Session isolation | Process-level (Malt.jl) | Via Gate | Shared REPL |
 | Revise.jl integration | Auto-load + auto-revise hook | Manual | No |
 | True hard reset (type redef) | Yes | N/A | No |
 | Debugging (breakpoints, stepping) | No | Yes (VS Code) | No |
@@ -501,11 +517,13 @@ src/
   highlighting.jl        # Julia syntax highlighting (JuliaSyntaxHighlighting.jl)
   formatting.jl          # Result formatting, stacktrace truncation
   sessions.jl            # Multi-session lifecycle (create, switch, list, destroy)
-  worker.jl              # Distributed worker lifecycle
+  worker.jl              # Malt worker lifecycle
   revise.jl              # Revise.jl integration (revise, track, includet, status)
   packages.jl            # Pkg actions, project activation
-  logging.jl             # Log viewer functionality
+  logging.jl             # Log viewer + persistent audit logging
+  attach.jl              # Interactive shared REPL (Unix socket + tmux client)
   tools.jl               # MCP tool definitions (8 tools)
+  resources.jl           # MCP resources (session variables, info, project, log)
   server.jl              # start_server function
 ```
 
@@ -513,7 +531,7 @@ src/
 
 | Component | File | Description |
 |-----------|------|-------------|
-| `SessionState` | types.jl | Per-session state: worker ID, project path, Revise status |
+| `SessionState` | types.jl | Per-session state: worker handle, project path, Revise status |
 | `SessionRegistry` | types.jl | Registry of all sessions with current-session tracking |
 | `LogViewerState` | types.jl | Optional log viewer terminal state |
 | `HighlightConfig` | types.jl | Syntax highlighting configuration |

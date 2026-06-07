@@ -3,7 +3,7 @@
 #
 # Usage: julia repl_client.jl <socket_path> [session_name]
 #
-# This script connects to a Unix domain socket server running inside a Distributed.jl worker,
+# This script connects to a Unix domain socket server running inside a Malt worker,
 # providing a human-friendly REPL that shares state with the MCP agent.
 
 using Sockets: connect

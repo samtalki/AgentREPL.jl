@@ -7,7 +7,7 @@
     @testset "is_revise_available with no worker" begin
         session = AgentREPL.create_session!("revise-test")
         # No worker spawned yet
-        @test session.worker_id === nothing
+        @test session.worker === nothing
         @test !AgentREPL.is_revise_available(session)
     end
 

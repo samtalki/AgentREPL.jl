@@ -87,7 +87,7 @@ end
         @test elapsed >= 1.0
         # Worker should have been killed
         session = AgentREPL.get_current_session!()
-        @test session.worker_id === nothing
+        @test session.worker === nothing
     end
 
     @testset "Next eval after timeout spawns fresh worker" begin
@@ -96,7 +96,7 @@ end
         @test error_str === nothing
         @test value_str == "42"
         session = AgentREPL.get_current_session!()
-        @test session.worker_id !== nothing
+        @test session.worker !== nothing
     end
 
     @testset "No timeout when code completes fast" begin
@@ -256,9 +256,10 @@ end
 
         # Reset the worker
         session = AgentREPL.get_current_session!()
-        old_id = session.worker_id
-        new_id = AgentREPL.reset_worker!(session)
-        @test new_id != old_id
+        old_pid = AgentREPL.worker_pid(session)
+        AgentREPL.reset_worker!(session)
+        new_pid = AgentREPL.worker_pid(session)
+        @test new_pid != old_pid
 
         # Variable should no longer exist
         _, _, error_str, _ = AgentREPL.capture_eval_on_worker("reset_test_var")
@@ -286,13 +287,13 @@ end
         # Ensure we have a worker
         session = AgentREPL.get_current_session!()
         AgentREPL.ensure_worker!(session)
-        @test session.worker_id !== nothing
+        @test session.worker !== nothing
 
         # exit() should crash the worker
         value_str, output, error_str, elapsed = AgentREPL.capture_eval_on_worker("exit()")
         @test error_str !== nothing
-        @test contains(error_str, "crashed") || contains(error_str, "ProcessExitedException")
-        @test session.worker_id === nothing
+        @test contains(error_str, "terminated") || contains(error_str, "crashed")
+        @test session.worker === nothing
         @test session.revise_loaded == false
     end
 
@@ -302,7 +303,58 @@ end
         @test error_str === nothing
         @test value_str == "42"
         session = AgentREPL.get_current_session!()
-        @test session.worker_id !== nothing
+        @test session.worker !== nothing
+    end
+
+    @testset "Crash during a timed eval (timeout :error branch)" begin
+        # A worker that dies WITH a timeout set must be reported as a crash, not a
+        # timeout. This exercises the :error branch of the timeout race, distinct
+        # from the no-timeout path and the :timeout path.
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        @test session.worker !== nothing
+        _, _, error_str, _ = AgentREPL.capture_eval_on_worker("exit()"; timeout=30.0)
+        @test error_str !== nothing
+        @test contains(error_str, "terminated") || contains(error_str, "crashed")
+        @test !contains(error_str, "TimeoutError")
+        @test session.worker === nothing
+    end
+end
+
+@testset "Worker Notes" begin
+    @testset "eval surfaces a note once, then consumes it" begin
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        push!(session.worker_notes, "synthetic-note-xyz")
+        tool = AgentREPL.create_eval_tool()
+        r = tool.handler(Dict("code" => "1+1"))
+        text = r isa AgentREPL.TextContent ? r.text : r.content[1]["text"]
+        @test occursin("synthetic-note-xyz", text)   # surfaced in the eval result
+        @test isempty(session.worker_notes)           # then cleared
+
+        # A subsequent eval no longer repeats it.
+        r2 = tool.handler(Dict("code" => "2+2"))
+        text2 = r2 isa AgentREPL.TextContent ? r2.text : r2.content[1]["text"]
+        @test !occursin("synthetic-note-xyz", text2)
+    end
+
+    @testset "info peeks a note without consuming it" begin
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        push!(session.worker_notes, "peek-note-abc")
+        r = AgentREPL.create_info_tool().handler(Dict())
+        text = r isa AgentREPL.TextContent ? r.text : r.content[1]["text"]
+        @test occursin("peek-note-abc", text)
+        @test !isempty(session.worker_notes)          # info does not consume
+        empty!(session.worker_notes)
+    end
+
+    @testset "notes do not leak across a respawn" begin
+        session = AgentREPL.get_current_session!()
+        AgentREPL.ensure_worker!(session)
+        push!(session.worker_notes, "stale-note-should-vanish")
+        AgentREPL.reset_worker!(session)              # clears notes on (re)spawn
+        @test !any(n -> occursin("stale-note-should-vanish", n), session.worker_notes)
     end
 end
 
@@ -346,13 +398,13 @@ end
         AgentREPL.create_session!("cleanup-test")
         AgentREPL.capture_eval_on_worker("1+1"; session_name="cleanup-test")
         session = AgentREPL.SESSIONS.sessions["cleanup-test"]
-        worker_id = session.worker_id
-        @test worker_id !== nothing
-        @test worker_id in Distributed.workers()
+        worker = session.worker
+        @test worker !== nothing
+        @test AgentREPL.Malt.isrunning(worker)
 
         AgentREPL._cleanup_all_workers!()
 
-        @test !(worker_id in Distributed.workers())
+        @test !AgentREPL.Malt.isrunning(worker)
         # Clean up session registry
         try; AgentREPL.destroy_session!("cleanup-test"); catch; end
     end
@@ -477,5 +529,5 @@ end
 @testset "Cleanup" begin
     session = AgentREPL.get_current_session!()
     AgentREPL.kill_worker!(session)
-    @test session.worker_id === nothing
+    @test session.worker === nothing
 end
