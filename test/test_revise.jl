@@ -108,6 +108,49 @@
         @test status.watched_packages isa Vector{String}
     end
 
+    @testset "Hot-reload from an activated project (end-to-end)" begin
+        # Exercises loading Revise from the session's own activated project — the path
+        # that was broken when Revise loaded before Pkg.activate. Adds Revise to a fresh
+        # temp project, then verifies an edit is picked up by revise() without a reset.
+        mktempdir() do proj
+            src = joinpath(proj, "Hotmod.jl")
+            write(src, "hotgreet() = \"v1\"\n")
+
+            session = AgentREPL.get_current_session!()
+            AgentREPL.activate_project_on_worker!(proj)
+            padd = AgentREPL.run_pkg_action_on_worker("add", ["Revise"])
+            @test padd.error === nothing
+            AgentREPL.reset_worker!(session)          # respawn: activate proj, then load Revise from it
+            @test AgentREPL.is_revise_available(session)
+
+            inc = AgentREPL.includet_on_worker!(session, src)
+            @test inc.success
+            v1, _, e1, _ = AgentREPL.capture_eval_on_worker("hotgreet()")
+            @test e1 === nothing && occursin("v1", v1)
+
+            write(src, "hotgreet() = \"v2\"\n")         # edit the tracked file
+            # Revise observes the change through its async file watcher
+            # (kqueue/FSEvents on macOS), so a single revise() right after the
+            # write can race the watcher. Poll until the new definition lands.
+            local rev = (success = false,)
+            local v2 = ""
+            local e2 = nothing
+            revised = false
+            for _ in 1:50
+                sleep(0.1)
+                rev = AgentREPL.revise_on_worker!(session)
+                v2, _, e2, _ = AgentREPL.capture_eval_on_worker("hotgreet()")
+                if rev.success && e2 === nothing && occursin("v2", v2)
+                    revised = true
+                    break
+                end
+            end
+            @test rev.success
+            @test revised
+            @test e2 === nothing && occursin("v2", v2)
+        end
+    end
+
     @testset "Cleanup" begin
         for name in collect(keys(AgentREPL.SESSIONS.sessions))
             try; AgentREPL.destroy_session!(name); catch; end

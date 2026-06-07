@@ -32,7 +32,18 @@ worker_live(session::SessionState) =
 
 First line of an exception's message, for compact session notes.
 """
-_one_line(e) = first(split(sprint(showerror, e), '\n'; limit=2))
+function _one_line(e)
+    full = sprint(showerror, e)
+    # A Malt.RemoteException renders as "Remote exception from Malt.Worker on port N
+    # with PID M:" followed by the real cause. Return the first meaningful line so a
+    # session note shows e.g. "Package Revise not found", not the boilerplate prefix.
+    for line in split(full, '\n')
+        s = strip(line)
+        (isempty(s) || startswith(s, "Remote exception from Malt.Worker")) && continue
+        return String(s)
+    end
+    return String(strip(first(split(full, '\n'))))
+end
 
 """
     _unwrap(e) -> Exception
@@ -184,32 +195,6 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
             rethrow()
         end
 
-        # Load Revise — optional. Degrade gracefully and record a note.
-        if !_retry_without_revise
-            try
-                _remote_eval_fetch(w, :(using Revise))
-                session.revise_loaded = true
-            catch e
-                session.revise_loaded = false
-                push!(session.worker_notes,
-                    "Revise.jl not loaded ($(_one_line(e))). Hot-reload is disabled; add it with pkg(action=\"add\", packages=\"Revise\").")
-                if e isa Malt.RemoteException
-                    @warn "Could not load Revise.jl on worker" session=session.name
-                else
-                    @warn "Unexpected error loading Revise.jl on worker" session=session.name exception=(e, catch_backtrace())
-                end
-            end
-
-            # If loading Revise crashed the worker, respawn once without Revise.
-            if !worker_live(session)
-                _clear_worker_state!(session)
-                w2 = ensure_worker!(session; _retry_without_revise=true)
-                push!(session.worker_notes,
-                    "Loading Revise.jl crashed the worker; respawned without it. Hot-reload is disabled.")
-                return w2
-            end
-        end
-
         if session.project_path !== nothing
             try
                 path = session.project_path
@@ -237,6 +222,34 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
                 push!(session.worker_notes, "Workspace directory $(session.workspace_path) could not be restored; cleared.")
                 @warn "Failed to restore workspace on worker, clearing" workspace=session.workspace_path error=e
                 session.workspace_path = nothing
+            end
+        end
+
+        # Load Revise — optional. Loaded AFTER the project is activated so it resolves
+        # against the session's environment (where the user added it), not AgentREPL's
+        # own project. Degrade gracefully and record a note on failure.
+        if !_retry_without_revise
+            try
+                _remote_eval_fetch(w, :(using Revise))
+                session.revise_loaded = true
+            catch e
+                session.revise_loaded = false
+                push!(session.worker_notes,
+                    "Revise.jl not loaded ($(_one_line(e))). Hot-reload is disabled; add it with pkg(action=\"add\", packages=\"Revise\").")
+                if e isa Malt.RemoteException
+                    @warn "Could not load Revise.jl on worker" session=session.name
+                else
+                    @warn "Unexpected error loading Revise.jl on worker" session=session.name exception=(e, catch_backtrace())
+                end
+            end
+
+            # If loading Revise crashed the worker, respawn once without Revise.
+            if !worker_live(session)
+                _clear_worker_state!(session)
+                w2 = ensure_worker!(session; _retry_without_revise=true)
+                push!(session.worker_notes,
+                    "Loading Revise.jl crashed the worker; respawned without it. Hot-reload is disabled.")
+                return w2
             end
         end
 
