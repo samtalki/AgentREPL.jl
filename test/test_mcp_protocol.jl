@@ -202,8 +202,16 @@ end
             tool_names = Set([t["name"] for t in tools])
             expected = Set(["eval", "reset", "info", "pkg", "activate", "log_viewer", "session", "revise"])
             @test tool_names == expected
-            # Every tool carries a human-friendly title (B3)
+            # Every tool carries a human-friendly title
             @test all(haskey(t, "title") && !isempty(t["title"]) for t in tools)
+            # Tool annotations (needs the forked ModelContextProtocol.jl)
+            byname = Dict(t["name"] => t for t in tools)
+            @test byname["info"]["annotations"]["readOnlyHint"] == true
+            @test byname["reset"]["annotations"]["destructiveHint"] == true
+            @test byname["eval"]["annotations"]["openWorldHint"] == true
+            # Structured-output schema on the structured tools
+            @test haskey(byname["info"], "outputSchema")
+            @test haskey(byname["session"], "outputSchema")
         end
 
         # --- eval tool ---
@@ -239,6 +247,11 @@ end
             text = get_tool_text(resp)
             @test occursin("Julia Version", text)
             @test occursin("default", text)  # session name
+            # structured mirror (needs the forked ModelContextProtocol.jl)
+            sc = resp["result"]["structuredContent"]
+            @test haskey(sc, "julia_version")
+            @test haskey(sc, "worker_pid")
+            @test sc["session"] == "default"
         end
 
         # --- session tool ---
@@ -254,6 +267,10 @@ end
             text = get_tool_text(resp)
             @test occursin("test-s1", text)
             @test occursin("default", text)
+            # structured mirror (needs the forked ModelContextProtocol.jl)
+            sc = resp["result"]["structuredContent"]
+            @test !isempty(sc["sessions"])
+            @test any(s -> s["name"] == "test-s1", sc["sessions"])
         end
 
         @testset "session - isolation" begin

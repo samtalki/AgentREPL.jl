@@ -1,6 +1,22 @@
 # tools.jl - MCP tool definitions
 
 """
+    _tool_annotations(; read_only=false, destructive=false, idempotent=false, open_world=false) -> Dict
+
+Build an MCP tool-annotations dict (behavioral hints clients use for trust/UX, e.g.
+auto-approval). All four hints are emitted explicitly so clients don't fall back to
+spec defaults. See https://modelcontextprotocol.io for semantics.
+"""
+_tool_annotations(; read_only::Bool=false, destructive::Bool=false,
+                    idempotent::Bool=false, open_world::Bool=false) =
+    Dict{String,Any}(
+        "readOnlyHint" => read_only,
+        "destructiveHint" => destructive,
+        "idempotentHint" => idempotent,
+        "openWorldHint" => open_world,
+    )
+
+"""
     _validate_action(params, valid_actions::Vector{String}) -> String
 
 Validate and extract an action parameter. Returns the lowercased action string.
@@ -41,6 +57,7 @@ function create_eval_tool()
     MCPTool(
         name = "eval",
         title = "Evaluate Julia code",
+        annotations = _tool_annotations(destructive=true, open_world=true),  # runs arbitrary code
         description = """
 Evaluate Julia code in a persistent Julia REPL session.
 
@@ -184,6 +201,7 @@ function create_reset_tool()
     MCPTool(
         name = "reset",
         title = "Reset Julia session",
+        annotations = _tool_annotations(destructive=true),  # kills the worker, drops all state
         description = """
 Hard reset: Kill the Julia worker process and spawn a fresh one.
 
@@ -249,6 +267,20 @@ function create_info_tool()
     MCPTool(
         name = "info",
         title = "Julia session info",
+        annotations = _tool_annotations(read_only=true, idempotent=true),
+        output_schema = Dict{String,Any}(
+            "type" => "object",
+            "properties" => Dict{String,Any}(
+                "session" => Dict{String,Any}("type" => "string"),
+                "julia_version" => Dict{String,Any}("type" => "string"),
+                "project" => Dict{String,Any}("type" => "string"),
+                "loaded_modules" => Dict{String,Any}("type" => "integer"),
+                "revise_loaded" => Dict{String,Any}("type" => "boolean"),
+                "worker_pid" => Dict{String,Any}("type" => ["integer", "null"]),
+                "variables" => Dict{String,Any}("type" => "array"),
+                "notes" => Dict{String,Any}("type" => "array"),
+            ),
+        ),
         description = """
 Get information about the current Julia session.
 
@@ -313,7 +345,22 @@ $vars_str
 Loaded Modules: $(info.modules)
 Worker pid: $(something(worker_pid(session), "not yet spawned"))
 $(notes_str)$(timings_str)"""
-                TextContent(text = msg)
+
+                # Machine-readable mirror of the same info (see the tool's output_schema).
+                structured = Dict{String,Any}(
+                    "session" => session.name,
+                    "julia_version" => info.version,
+                    "project" => info.project,
+                    "loaded_modules" => info.modules,
+                    "revise_loaded" => session.revise_loaded,
+                    "worker_pid" => worker_pid(session),
+                    "variables" => [Dict{String,Any}("name" => string(v.name), "type" => v.type, "size" => v.size) for v in info.variables],
+                    "notes" => copy(session.worker_notes),
+                )
+                CallToolResult(
+                    content = Dict{String,Any}[Dict{String,Any}("type" => "text", "text" => msg)],
+                    structured_content = structured,
+                )
             catch e
                 e isa InterruptException && rethrow()
                 e isa OutOfMemoryError && rethrow()
@@ -332,6 +379,7 @@ function create_pkg_tool()
     MCPTool(
         name = "pkg",
         title = "Manage Julia packages",
+        annotations = _tool_annotations(destructive=true, open_world=true),  # add/rm modify env, download
         description = """
 Manage Julia packages in the current environment.
 
@@ -460,6 +508,7 @@ function create_activate_tool()
     MCPTool(
         name = "activate",
         title = "Activate Julia project",
+        annotations = _tool_annotations(idempotent=true),  # switches env; re-activating is a no-op
         description = """
 Activate a Julia project or environment.
 
@@ -522,6 +571,7 @@ function create_log_viewer_tool()
     MCPTool(
         name = "log_viewer",
         title = "Julia log viewer",
+        annotations = _tool_annotations(),  # toggles a viewer; no session state change
         description = """
 Open a separate terminal window showing Julia REPL output in real-time.
 
@@ -582,6 +632,14 @@ function create_session_tool()
     MCPTool(
         name = "session",
         title = "Manage Julia sessions",
+        annotations = _tool_annotations(destructive=true),  # destroy kills a worker
+        output_schema = Dict{String,Any}(  # describes the list action's structured result
+            "type" => "object",
+            "properties" => Dict{String,Any}(
+                "sessions" => Dict{String,Any}("type" => "array"),
+                "current" => Dict{String,Any}("type" => ["string", "null"]),
+            ),
+        ),
         description = """
 Manage multiple Julia REPL sessions.
 
@@ -653,7 +711,22 @@ Examples:
                         age_min = round(s.age_seconds / 60; digits=1)
                         push!(lines, "$marker $(s.name) — $worker, $project, $revise ($(age_min)min)")
                     end
-                    TextContent(text = join(lines, "\n"))
+                    # Machine-readable mirror (see the tool's output_schema).
+                    structured = Dict{String,Any}(
+                        "current" => SESSIONS.current,
+                        "sessions" => [Dict{String,Any}(
+                            "name" => s.name,
+                            "worker_pid" => s.worker_pid,
+                            "project" => s.project,
+                            "revise_loaded" => s.revise,
+                            "is_current" => s.is_current,
+                            "age_seconds" => round(s.age_seconds; digits=1),
+                        ) for s in sessions],
+                    )
+                    CallToolResult(
+                        content = Dict{String,Any}[Dict{String,Any}("type" => "text", "text" => join(lines, "\n"))],
+                        structured_content = structured,
+                    )
 
                 elseif action_lower == "destroy"
                     destroy_session!(name)
@@ -712,6 +785,7 @@ function create_revise_tool()
     MCPTool(
         name = "revise",
         title = "Hot-reload (Revise.jl)",
+        annotations = _tool_annotations(idempotent=true),  # reloads tracked changes
         description = """
 Hot-reload Julia code changes using Revise.jl — no session restart needed.
 
