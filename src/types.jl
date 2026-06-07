@@ -17,6 +17,7 @@ project environment, and Revise.jl tracking state.
 - `last_used::Float64`: Last time this session was used (from `time()`)
 - `eval_timings::Vector{Float64}`: Ring buffer of recent eval durations (capped at `MAX_EVAL_TIMINGS`)
 - `worker_notes::Vector{String}`: Non-fatal setup warnings from the current worker spawn (e.g. Revise failed to load, project activation failed). Consumed (cleared) when surfaced by `eval` or `reset`; `info` peeks without clearing. Reset to empty on every (re)spawn, so notes never leak across worker generations
+- `recent_output::Vector{String}`: Ring buffer (capped at `MAX_RECENT_OUTPUT`) of the worker's out-of-band output — lines printed outside an eval's capture window (spawn-time precompile, async tasks). Surfaced via the `session/log` resource and teed to the log viewer; cleared on (re)spawn
 """
 mutable struct SessionState
     const name::String
@@ -29,15 +30,17 @@ mutable struct SessionState
     last_used::Float64
     eval_timings::Vector{Float64}
     worker_notes::Vector{String}
+    recent_output::Vector{String}
 
     function SessionState(name::String, worker::Union{Malt.Worker,Nothing}, project_path::Union{String,Nothing}, revise_loaded::Bool=false)
         isempty(name) && error("Session name must not be empty")
         now = time()
-        new(name, worker, project_path, nothing, nothing, revise_loaded, now, now, Float64[], String[])
+        new(name, worker, project_path, nothing, nothing, revise_loaded, now, now, Float64[], String[], String[])
     end
 end
 
 const MAX_EVAL_TIMINGS = 50
+const MAX_RECENT_OUTPUT = 200
 
 """
     SessionRegistry

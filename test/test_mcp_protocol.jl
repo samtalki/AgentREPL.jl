@@ -184,11 +184,11 @@ end
             @test resp["result"]["serverInfo"]["name"] == "julia-repl"
             @test haskey(resp["result"], "protocolVersion")
 
-            # Advertise only what we implement: tools + resources, not prompts (B1)
+            # Advertise what we implement: tools, resources, prompts (not subscribe).
             caps = resp["result"]["capabilities"]
             @test haskey(caps, "tools")
             @test haskey(caps, "resources")
-            @test !haskey(caps, "prompts")
+            @test haskey(caps, "prompts")
 
             # Send initialized notification
             send_notification!(client, "notifications/initialized")
@@ -321,6 +321,25 @@ end
             payload = JSON3.read(contents[1]["text"], Dict{String,Any})
             @test haskey(payload, "julia_version")
             @test haskey(payload, "worker_pid")
+        end
+
+        # --- prompts ---
+        @testset "prompts - list" begin
+            id = send_request!(client, "prompts/list", Dict())
+            resp = recv_response(client; timeout=30.0, id=id)
+            names = Set([p["name"] for p in resp["result"]["prompts"]])
+            @test "julia-dev-setup" in names
+            @test "julia-benchmark" in names
+            @test "julia-debug-error" in names
+        end
+
+        @testset "prompts - get substitutes args" begin
+            id = send_request!(client, "prompts/get",
+                Dict("name" => "julia-dev-setup", "arguments" => Dict("path" => "/tmp/myproj")))
+            resp = recv_response(client; timeout=30.0, id=id)
+            text = resp["result"]["messages"][1]["content"]["text"]
+            @test occursin("/tmp/myproj", text)        # {path} substituted
+            @test !occursin("{path}", text)
         end
 
         # --- transport stays clean JSON even when a worker prints out of band ---

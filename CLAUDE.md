@@ -58,7 +58,8 @@ src/
   repl_client.jl         # Standalone REPL client (run via tmux subprocess, NOT included in module)
   tools.jl               # MCP tool definitions (8 tools)
   resources.jl           # MCP resources (session variables, info, project, log, sessions)
-  server.jl              # start_server function (registers tools + resources, declares capabilities)
+  prompts.jl             # MCP prompts (julia-dev-setup, julia-benchmark, julia-debug-error)
+  server.jl              # start_server function (registers tools + resources + prompts, declares capabilities)
 ```
 
 ### Syntax Highlighting
@@ -138,7 +139,11 @@ Five read-only resources (`resources.jl`) expose session state so a client can p
 - `agentrepl://session/variables` - user variables (name, type, size) in the current session
 - `agentrepl://session/info` - Julia version, project, module count, Revise status, worker pid, setup notes
 - `agentrepl://session/project` - active `Project.toml` contents and whether a `Manifest.toml` is present
-- `agentrepl://session/log` - recent audit-log entries (when `JULIA_REPL_AUDIT_DIR` is set)
+- `agentrepl://session/log` - recent out-of-band worker output (`recent_output` ring: spawn-time precompile, async prints) plus audit-log entries when `JULIA_REPL_AUDIT_DIR` is set
+
+### MCP Prompts
+
+Three prompts (`prompts.jl`) expose reusable Julia workflows as slash commands (work without the plugin). Static `MCPPrompt` templates with `{arg}`/`{?arg?…}` substitution handled by the framework: `julia-dev-setup` (arg `path`), `julia-benchmark` (arg `code`), `julia-debug-error` (args `code`, `error?`). Registered in `start_server` with `PromptCapability`.
 
 ### Key Design Decisions
 

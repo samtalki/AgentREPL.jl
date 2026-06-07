@@ -53,6 +53,58 @@ function format_elapsed(elapsed::Float64)
 end
 
 """
+    strip_harness_frames(error_str::String) -> String
+
+Remove AgentREPL/Malt wrapper frames from a rendered stacktrace, leaving only the
+user's frames. User code runs through `include_string`, so the harness is a
+contiguous tail: the first frame that is `include_string` (or the boot-level
+`eval(m::Module, e::Any)` that runs it) marks the boundary — that frame and
+everything below it (`src/worker.jl`, the Malt handler) is harness. Frames above
+it are the user's and are kept (renumbered). For a bare top-level error there are
+no user frames, so only the message remains (the empty Stacktrace is dropped).
+No-op when no harness boundary is found, so unusual traces are never mangled.
+"""
+function strip_harness_frames(error_str::String)
+    lines = split(error_str, '\n')
+    st = findfirst(l -> startswith(strip(l), "Stacktrace:"), lines)
+    st === nothing && return error_str
+
+    pre = collect(lines[1:st-1])    # message lines (the "Stacktrace:" label is re-added below)
+    body = lines[st+1:end]
+
+    isframe(l) = occursin(r"^\s*\[\d+\]", l)
+    blocks = Vector{Vector{eltype(lines)}}()
+    for l in body
+        if isframe(l)
+            push!(blocks, [l])
+        elseif !isempty(blocks)
+            push!(blocks[end], l)
+        else
+            push!(pre, l)
+        end
+    end
+
+    # First harness frame: include_string, or the boot eval that invokes it.
+    isharness(block) = occursin("include_string", block[1]) ||
+                       occursin("eval(m::Module, e::Any)", block[1])
+    cut = findfirst(isharness, blocks)
+    kept = cut === nothing ? blocks : blocks[1:cut-1]
+
+    isempty(kept) && return String(rstrip(join(pre, '\n')))   # message only; drop empty Stacktrace
+
+    out = copy(pre)
+    push!(out, lines[st])           # "Stacktrace:" label
+    for (i, block) in enumerate(kept)
+        push!(out, replace(block[1], r"\[\d+\]" => "[$i]", count=1))
+        for extra in block[2:end]
+            occursin("in expression starting at", extra) && continue
+            push!(out, extra)
+        end
+    end
+    return String(join(out, '\n'))
+end
+
+"""
     truncate_stacktrace(error_str::String; max_frames::Int=5) -> String
 
 Truncate a stacktrace to the most relevant frames.
@@ -170,7 +222,9 @@ function format_result(code::String, value_str::String, output::String, error_st
 
     # Show result or error
     if error_str !== nothing
-        truncated_error = truncate_stacktrace(error_str; max_frames=max_stackframes)
+        # Drop AgentREPL/Malt harness frames first, then truncate the user frames.
+        cleaned_error = strip_harness_frames(error_str)
+        truncated_error = truncate_stacktrace(cleaned_error; max_frames=max_stackframes)
         if use_ansi
             push!(parts, style_error(truncated_error))
         else

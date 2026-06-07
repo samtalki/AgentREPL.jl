@@ -97,19 +97,22 @@ end
 
 _resource_log() = _resource_safe() do
     session = get_current_session!()
+    # `recent_output` always available: out-of-band worker output (spawn-time
+    # precompile, async prints) captured by the drain, even when audit is off.
+    recent = copy(session.recent_output)
     if _AUDIT_DIR[] === nothing
-        return (session = session.name, audit_enabled = false,
-                note = "Audit logging is disabled. Set JULIA_REPL_AUDIT_DIR to enable a persistent per-session log.")
+        return (session = session.name, audit_enabled = false, recent_output = recent,
+                note = "Audit logging is disabled (set JULIA_REPL_AUDIT_DIR for a persistent per-session log). 'recent_output' is recent out-of-band worker output.")
     end
     date_str = Dates.format(Dates.today(), "yyyy-mm-dd")
     path = joinpath(_AUDIT_DIR[], "$(session.name)_$(date_str).log")
     if !isfile(path)
         return (session = session.name, audit_enabled = true, path = path, tail = String[],
-                note = "No audit entries yet today.")
+                recent_output = recent, note = "No audit entries yet today.")
     end
     lines = readlines(path)
     tail = length(lines) > 200 ? lines[end-199:end] : lines
-    (session = session.name, audit_enabled = true, path = path, tail = tail)
+    (session = session.name, audit_enabled = true, path = path, tail = tail, recent_output = recent)
 end
 
 """

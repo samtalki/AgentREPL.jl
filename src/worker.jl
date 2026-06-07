@@ -95,6 +95,7 @@ function _clear_worker_state!(session::SessionState)
     session.revise_loaded = false
     empty!(session.eval_timings)
     empty!(session.worker_notes)
+    empty!(session.recent_output)
 end
 
 """
@@ -110,19 +111,21 @@ function _handle_worker_crash!(session::SessionState, e)
 end
 
 """
-    _start_output_drain!(session_name::String, w::Malt.Worker)
+    _start_output_drain!(session::SessionState, w::Malt.Worker)
 
 Drain the worker's stdout/stderr pipes so out-of-band output (async tasks,
-finalizers, background prints that fire outside an eval's capture window) cannot
-fill the pipe buffer and block the worker.
+finalizers, spawn-time precompile, background prints that fire outside an eval's
+capture window) cannot fill the pipe buffer and block the worker.
 
 The worker is spawned with `monitor_stdout=false`/`monitor_stderr=false`, so Malt
 does NOT reprint worker output onto the host's stdout — which is the MCP JSON-RPC
-transport. We route drained lines to our own stderr (safe: never the transport),
-where Claude Code collects them in the MCP server log. In-band eval output is
-captured separately by `_with_output_capture` and is unaffected.
+transport. Each drained line is routed three safe ways (never the transport): our
+own stderr (the MCP server log), the session's `recent_output` ring (surfaced via
+the `session/log` resource), and the live log viewer when one is attached. In-band
+eval output is captured separately by `_with_output_capture` and is unaffected.
 """
-function _start_output_drain!(session_name::String, w::Malt.Worker)
+function _start_output_drain!(session::SessionState, w::Malt.Worker)
+    name = session.name
     for (pipe, label) in ((w.stdout, "stdout"), (w.stderr, "stderr"))
         @async begin
             try
@@ -130,10 +133,19 @@ function _start_output_drain!(session_name::String, w::Malt.Worker)
                     eof(pipe) && break          # blocks until a byte or EOF; clean close exits
                     line = readline(pipe)
                     isempty(line) && continue
+                    tagged = "[worker:$name:$label] " * line
+                    try; println(stderr, tagged); catch; end
+                    # recent-output ring (post-hoc visibility via session/log)
                     try
-                        println(stderr, "[worker:$session_name:$label] ", line)
-                    catch
-                    end
+                        push!(session.recent_output, line)
+                        length(session.recent_output) > MAX_RECENT_OUTPUT && popfirst!(session.recent_output)
+                    catch; end
+                    # live log viewer, if attached (e.g. watch precompile progress)
+                    try
+                        if LOG_VIEWER.log_io !== nothing
+                            println(LOG_VIEWER.log_io, tagged); flush(LOG_VIEWER.log_io)
+                        end
+                    catch; end
                 end
             catch e
                 # A clean EOF leaves the loop above; reaching here means an unexpected
@@ -141,7 +153,7 @@ function _start_output_drain!(session_name::String, w::Malt.Worker)
                 # silently dead drain is what lets the pipe fill and wedge the worker.
                 if Malt.isrunning(w)
                     try
-                        println(stderr, "[worker:$session_name:$label] drain stopped on error: ", sprint(showerror, e))
+                        println(stderr, "[worker:$name:$label] drain stopped on error: ", sprint(showerror, e))
                     catch
                     end
                 end
@@ -183,7 +195,7 @@ function ensure_worker!(session::SessionState; _retry_without_revise::Bool=false
             error("Failed to spawn worker for session '$(session.name)': $(sprint(showerror, e))")
         end
         session.worker = w
-        _start_output_drain!(session.name, w)
+        _start_output_drain!(session, w)
 
         # Load Pkg — required. A failure here means the worker is unusable.
         try
@@ -376,7 +388,15 @@ function capture_eval_on_worker(code::String; timeout::Union{Float64,Nothing}=no
                 combined_output *= "\n[stderr]\n" * stderr_content
             end
 
-            error_str = _eval_err === nothing ? nothing : sprint(showerror, _eval_err, _eval_bt)
+            # include_string wraps the user's error in a LoadError; unwrap it so the
+            # rendered message is the real exception (e.g. "UndefVarError: …"), not
+            # "LoadError: …". The backtrace still carries the user frames.
+            error_str = if _eval_err === nothing
+                nothing
+            else
+                _show_err = _eval_err isa LoadError ? _eval_err.error : _eval_err
+                sprint(showerror, _show_err, _eval_bt)
+            end
             value_str = try
                 if _use_color
                     sprint(io -> show(IOContext(io, :color => true, :compact => true, :limit => true), MIME"text/plain"(), _eval_value))
