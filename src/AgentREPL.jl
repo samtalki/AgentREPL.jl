@@ -68,6 +68,7 @@ include("logging.jl")
 include("attach.jl")
 include("tools.jl")
 include("resources.jl")
+include("prompts.jl")
 include("server.jl")
 
 function __init__()

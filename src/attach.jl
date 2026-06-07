@@ -80,7 +80,10 @@ function _start_repl_socket_server!(session::SessionState)
                                 catch e
                                     e isa OutOfMemoryError && rethrow()
                                     e isa InterruptException && rethrow()
-                                    err_str = sprint(showerror, e, catch_backtrace())
+                                    # Unwrap include_string's LoadError so the human REPL
+                                    # sees the real exception, matching the MCP eval path.
+                                    _se = e isa LoadError ? e.error : e
+                                    err_str = sprint(showerror, _se, catch_backtrace())
                                     "ERR:" * base64encode(err_str)
                                 end
 

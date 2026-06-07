@@ -349,7 +349,17 @@ Alongside the tools, AgentREPL exposes the current session's state as MCP resour
 | `agentrepl://session/variables` | User-defined variables in the current session (name, type, size) |
 | `agentrepl://session/info` | Julia version, project, module count, Revise status, worker pid, setup notes |
 | `agentrepl://session/project` | The active `Project.toml` and whether a `Manifest.toml` is present |
-| `agentrepl://session/log` | Recent audit-log entries (when `JULIA_REPL_AUDIT_DIR` is set) |
+| `agentrepl://session/log` | Recent out-of-band worker output (spawn-time precompile, async prints), plus audit-log entries when `JULIA_REPL_AUDIT_DIR` is set |
+
+## Prompts
+
+AgentREPL ships a few MCP prompts — reusable Julia workflows that Claude Code surfaces as slash commands. Unlike the plugin skills, they come with the MCP server itself, so they work without the plugin:
+
+| Prompt | Argument(s) | What it does |
+|--------|-------------|--------------|
+| `julia-dev-setup` | `path` | activate → instantiate → add Revise → hot-reload develop loop |
+| `julia-benchmark` | `code` | warm-up eval, then timed/isolated measurement (BenchmarkTools if available) |
+| `julia-debug-error` | `code`, `error?` | reproduce in an isolated eval, read the stacktrace, check types, propose a fix |
 
 ## Configuration
 

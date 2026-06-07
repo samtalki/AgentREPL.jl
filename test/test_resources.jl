@@ -108,6 +108,33 @@ end
         end
     end
 
+    @testset "log resource surfaces recent_output (out-of-band worker output)" begin
+        _reset_sessions!()
+        s = A.get_current_session!()
+        empty!(s.recent_output)
+        push!(s.recent_output, "Precompiling MyPkg...")
+        push!(s.recent_output, "  ✓ MyPkg")
+        got = A._resource_log()
+        @test got.ok
+        @test haskey(got, :recent_output)
+        @test any(l -> occursin("Precompiling", l), got.recent_output)
+    end
+
+    @testset "recent_output captures an async worker print" begin
+        _reset_sessions!()
+        s = A.get_current_session!()
+        A.ensure_worker!(s)
+        empty!(s.recent_output)
+        # marker built from bytes so it can't appear in the echoed source
+        A.capture_eval_on_worker("@async (sleep(0.3); println(String(UInt8[68,82,65,73,78,75])))")  # "DRAINK"
+        captured = false
+        for _ in 1:30
+            any(l -> occursin("DRAINK", l), s.recent_output) && (captured = true; break)
+            sleep(0.1)
+        end
+        @test captured
+    end
+
     @testset "agentrepl_resources registers the five resources" begin
         rs = A.agentrepl_resources()
         uris = Set(string(r.uri) for r in rs)

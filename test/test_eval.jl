@@ -212,6 +212,53 @@ Stacktrace:
         @test contains(result_all, "frame5")
         @test !contains(result_all, "truncated")
     end
+
+    @testset "Harness frame stripping" begin
+        wrapped = """
+boom
+Stacktrace:
+  [1] error(s::String)
+    @ Base ./error.jl:44
+  [2] g()
+    @ Main ./julia_eval:1
+  [3] top-level scope
+    @ julia_eval:1
+  [4] eval(m::Module, e::Any)
+    @ Core ./boot.jl:489
+  [5] include_string(m::Module, txt::String, fname::String)
+    @ Base ./loading.jl:2884
+  [6] top-level scope
+    @ ~/Research/AgentREPL.jl/src/worker.jl:365
+  [7] handle()
+    @ Malt ~/.julia/packages/Malt/x/src/worker.jl:120
+in expression starting at julia_eval:1
+"""
+        stripped = AgentREPL.strip_harness_frames(wrapped)
+        @test contains(stripped, "error(s::String)")
+        @test contains(stripped, "g()")
+        @test !contains(stripped, "worker.jl")
+        @test !contains(stripped, "include_string")
+        @test !contains(stripped, "boot.jl")
+        @test !contains(stripped, "Malt")
+        @test !contains(stripped, "in expression starting at")
+        @test contains(stripped, "[3] top-level scope")  # kept user frames renumbered 1..3
+        @test !contains(stripped, "[4]")
+
+        # No julia_eval/interactive_repl frame → no-op (protects the truncation tests).
+        plain = "UndefVarError: x\nStacktrace:\n [1] frame1()\n   @ Main ./file.jl:1"
+        @test AgentREPL.strip_harness_frames(plain) == plain
+        @test AgentREPL.strip_harness_frames("just a message") == "just a message"
+    end
+
+    @testset "End-to-end clean error" begin
+        _, _, err, _ = AgentREPL.capture_eval_on_worker("qqq_undefined_zzz")
+        fmt = AgentREPL.format_result("qqq_undefined_zzz", "nothing", "", err; max_stackframes=10)
+        @test contains(fmt, "UndefVarError")
+        @test !contains(fmt, "LoadError")
+        @test !contains(fmt, "worker.jl")
+        @test !contains(fmt, "include_string")
+        @test !contains(fmt, "boot.jl")
+    end
 end
 
 @testset "Worker Info" begin

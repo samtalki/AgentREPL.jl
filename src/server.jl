@@ -75,15 +75,17 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
     session_tool = create_session_tool()
     revise_tool = create_revise_tool()
 
-    # Resources expose live session state (variables, info, project, log) to the client.
+    # Resources expose live session state (variables, info, project, log); prompts are
+    # reusable Julia workflows surfaced as slash commands (work without the plugin).
     resources = agentrepl_resources()
+    prompts = agentrepl_prompts()
 
-    # Declare only the capabilities we actually implement. The framework default
-    # advertises resource subscriptions and prompts we don't serve; override it so
-    # clients see an accurate picture.
+    # Declare only the capabilities we actually implement. The framework default also
+    # advertises resource subscriptions we don't serve; declare an accurate set.
     capabilities = ModelContextProtocol.Capability[
         ModelContextProtocol.ToolCapability(list_changed=false),
         ModelContextProtocol.ResourceCapability(list_changed=false, subscribe=false),
+        ModelContextProtocol.PromptCapability(list_changed=false),
     ]
 
     # Create and start the server
@@ -93,6 +95,7 @@ function start_server(; project_dir::Union{String,Nothing}=nothing)
         description = "Persistent Julia REPL for AI agents - multi-session with Revise.jl hot-reloading",
         tools = [eval_tool, reset_tool, info_tool, pkg_tool, activate_tool, log_viewer_tool, session_tool, revise_tool],
         resources = resources,
+        prompts = prompts,
         capabilities = capabilities
     )
 
