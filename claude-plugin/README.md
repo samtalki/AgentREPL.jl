@@ -56,9 +56,9 @@ All tools except `log_viewer` and `session` accept an optional `session` paramet
 
 ### Hooks
 
-- **PreToolUse (eval)** - Ensures Julia code is displayed in a readable format before calling eval
-- **PostToolUse (Write/Edit)** - Automatically calls `revise` after editing `.jl` files to hot-reload changes
-- **PostToolUse (eval)** - Pastes rich visual output (plots, tables, matrices) as raw text to preserve ANSI colors
+- **PostToolUse (Write/Edit)** - A non-blocking `type: command` hook (`hooks/revise-nudge.sh`) that reminds the model to call `revise` after editing `.jl` files, so the session hot-reloads without losing state.
+
+The guidance to display code before eval and to expand plot results lives in the `julia-evaluation` and `julia-plot` skills, not hooks.
 
 ## Architecture
 
@@ -76,7 +76,7 @@ The plugin is designed to **minimize REPL restarts**:
 
 1. **Revise.jl** auto-loads on every worker — edit `.jl` files and hot-reload without losing state
 2. **Multiple sessions** — isolate risky work without affecting your main session
-3. **PostToolUse hook** — automatically hot-reloads after editing Julia files
+3. **PostToolUse hook** — reminds the model to `revise` after editing `.jl` files (non-blocking; never halts the turn)
 4. **Reset is a last resort** — only needed for struct layout changes (Julia < 1.12) or corrupted state
 
 ## Usage
@@ -106,7 +106,7 @@ On first use, Claude will ask about your environment preference:
 
 # Edit source files...
 
-/julia:julia-revise                     # Hot-reload changes (or automatic via hook)
+/julia:julia-revise                     # Hot-reload changes (the PostToolUse hook reminds you automatically)
 /julia:julia-pkg test                   # Run tests
 ```
 

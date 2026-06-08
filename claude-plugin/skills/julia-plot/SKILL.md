@@ -1,7 +1,7 @@
 ---
 name: julia-plot
 description: Activates when user asks to plot, chart, or visualize data in the Julia REPL.
-version: 0.7.0
+version: 0.7.1
 ---
 
 # Julia Plotting — UnicodePlots

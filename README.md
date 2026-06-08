@@ -12,7 +12,7 @@ AgentREPL is the simplest way to give Claude Code a persistent Julia session. Th
 
 1. **Zero-friction setup.** STDIO transport means Claude Code spawns and manages the Julia process automatically. No server to start, no port to configure, no process to monitor. Install the plugin and start coding.
 
-2. **Workflow-native Revise.jl.** Every worker auto-loads Revise.jl. The plugin's PostToolUse hook automatically calls `revise` after you edit `.jl` files. You never manually reload code.
+2. **Workflow-native Revise.jl.** Every worker auto-loads Revise.jl, and a non-blocking PostToolUse hook reminds the model to call `revise` after you edit `.jl` files, so you rarely reload code by hand.
 
 3. **True process isolation.** Each session is a separate Malt.jl worker process. You can redefine structs, kill crashed sessions, and run parallel workloads without cross-contamination. `reset` does what it says -- complete state erasure including type definitions.
 
@@ -44,8 +44,8 @@ claude /plugin add samtalki/AgentREPL.jl
 This provides:
 - Auto-configured MCP server (no manual setup)
 - 8 skills: `/julia-reset`, `/julia-info`, `/julia-pkg`, `/julia-activate`, `/julia-log`, `/julia-session`, `/julia-revise`, `/julia-develop`
-- Auto-triggering skills for Julia evaluation best practices and language expertise
-- Hooks: code display validation before `eval`, automatic `revise` after `.jl` file edits
+- Auto-triggering skills for Julia evaluation best practices and plotting
+- A non-blocking hook that reminds the model to `revise` after `.jl` file edits
 
 ### Option B: Manual MCP Configuration
 
@@ -394,7 +394,7 @@ The activated environment persists across `reset` calls.
 | Auto-start from Claude Code | Yes | No | No |
 | Dependencies | 6 (3 stdlib) | 30+ | Few |
 | Session isolation | Process-level (Malt.jl) | Via Gate | Shared REPL |
-| Revise.jl integration | Auto-load + auto-revise hook | Manual | No |
+| Revise.jl integration | Auto-load + revise nudge (hook + skill) | Manual | No |
 | True hard reset (type redef) | Yes | N/A | No |
 | Debugging (breakpoints, stepping) | No | Yes (VS Code) | No |
 | Semantic code search | No | Yes (Qdrant) | No |
@@ -442,12 +442,11 @@ No need to manually run `claude mcp add`. The plugin configures the Julia MCP se
 | `/julia:julia-revise [action] [path]` | Hot-reload code changes |
 | `/julia:julia-develop [path]` | Set up development workflow |
 
-**Auto-triggering:** `julia-evaluation` (best practices for REPL usage) and `julia-language` (deep Julia expertise: types, dispatch, metaprogramming, performance).
+**Auto-triggering:** `julia-evaluation` (best practices for REPL usage) and `julia-plot` (UnicodePlots plotting guidance).
 
 ### Hooks
 
-- **PreToolUse (eval)**: Validates that Julia code is displayed in a readable format before calling eval
-- **PostToolUse (Write/Edit)**: Automatically calls `revise` after editing `.jl` files to hot-reload changes
+- **PostToolUse (Write/Edit)**: A non-blocking `type: command` hook that reminds the model to call `revise` after editing `.jl` files, so the session hot-reloads without losing state. The display-code-before-eval and plot-expansion guidance lives in the `julia-evaluation` and `julia-plot` skills.
 
 ### Installation
 ```bash
