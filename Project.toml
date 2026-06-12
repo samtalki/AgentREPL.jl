@@ -11,13 +11,19 @@ ModelContextProtocol = "c58f755f-f2a7-4f48-bf29-4e9659b78499"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
 
+[sources]
+# DEV-ONLY pin (do not merge to main): send_progress and RequestContext-passing
+# tool handlers are not yet in a released ModelContextProtocol.jl. When upstream
+# releases them, drop this [sources] block and bump the [compat] entry instead.
+ModelContextProtocol = {url = "https://github.com/samtalki/ModelContextProtocol.jl", rev = "feat/progress-notifications"}
+
 [compat]
 Aqua = "0.8"
 Dates = "1"
 JSON3 = "1"
 JuliaSyntaxHighlighting = "1"
 Malt = "1.4"
-ModelContextProtocol = "0.4"
+ModelContextProtocol = "0.4, 0.5"
 Pkg = "1"
 Revise = "3"
 Test = "1"

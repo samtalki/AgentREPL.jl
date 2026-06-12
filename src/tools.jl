@@ -376,7 +376,7 @@ Examples:
                 required = false
             )
         ],
-        handler = params -> begin
+        handler = (params, ctx) -> begin
             try
                 action_lower = _validate_action(params, ["add", "rm", "status", "update", "instantiate", "resolve", "test", "develop", "free"])
 
@@ -401,7 +401,12 @@ Examples:
                 end
 
                 session_name = get(params, "session", nothing)
-                result = run_pkg_action_on_worker(action_lower, pkg_list; session_name=session_name)
+                # Emit MCP progress for the long-running actions. send_progress is a
+                # no-op when the client supplied no progressToken, so this is safe to
+                # always wire up. The status line is also teed to the log viewer.
+                progress_cb = (n, msg) -> ModelContextProtocol.send_progress(ctx, n; message=msg)
+                result = run_pkg_action_on_worker(action_lower, pkg_list;
+                                                  session_name=session_name, progress_cb=progress_cb)
 
                 if result.error !== nothing
                     return TextContent(text = "Error during Pkg.$action_lower:\n$(result.error)")

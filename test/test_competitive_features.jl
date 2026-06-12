@@ -267,3 +267,43 @@ end
         @test s.socket_path === nothing
     end
 end
+
+@testset "Progress heartbeat for long ops" begin
+    MCP = AgentREPL.ModelContextProtocol
+
+    @testset "Heartbeat fires and tees to the log ring" begin
+        s = AgentREPL.create_session!("progress-hb")
+        try
+            w = AgentREPL.ensure_worker!(s)
+            ticks = Tuple{Int,String}[]
+            result = AgentREPL._run_with_heartbeat(s, w, :(sleep(0.7); 7), "TestOp",
+                                                   (n, msg) -> push!(ticks, (n, msg)); interval=0.2)
+            @test result == 7
+            @test length(ticks) >= 2
+            @test occursin("still running", ticks[1][2])
+            @test occursin("done", ticks[end][2])
+            @test any(l -> occursin("TestOp", l), s.recent_output)  # teed to the ring
+        finally
+            try; AgentREPL.destroy_session!("progress-hb"); catch; end
+        end
+    end
+
+    @testset "Heartbeat emits MCP notifications/progress" begin
+        s = AgentREPL.create_session!("progress-wire")
+        try
+            w = AgentREPL.ensure_worker!(s)
+            server = MCP.mcp_server(name="hb", version="0.0.0")
+            buf = IOBuffer()
+            server.transport = MCP.StdioTransport(output=buf)
+            ctx = MCP.RequestContext(server=server, progress_token="hb-1")
+            AgentREPL._run_with_heartbeat(s, w, :(sleep(0.7); nothing), "WireOp",
+                                          (n, msg) -> MCP.send_progress(ctx, n; message=msg); interval=0.2)
+            wire = String(take!(buf))
+            @test occursin("notifications/progress", wire)
+            @test occursin("hb-1", wire)
+            @test occursin("WireOp", wire)
+        finally
+            try; AgentREPL.destroy_session!("progress-wire"); catch; end
+        end
+    end
+end
